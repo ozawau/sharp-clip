@@ -133,12 +133,13 @@ internal sealed class Library
         using var db = Connect();
         using var cmd = db.CreateCommand();
         var sql = pinboardId is null
-            ? "SELECT c.* FROM clips c"
+            ? "SELECT c.* FROM clips c WHERE 1=1"
             : "SELECT c.* FROM clips c JOIN entries e ON e.item_id = c.id WHERE e.pinboard_id = $board";
-        sql += pinboardId is null ? " WHERE 1=1" : "";
         if (!string.IsNullOrWhiteSpace(type) && type != "all") sql += " AND c.content_type = $type";
         if (!string.IsNullOrWhiteSpace(query)) sql += " AND (c.text_content LIKE $q OR c.user_title LIKE $q OR c.source_app LIKE $q)";
-        sql += " ORDER BY c.copied_at DESC LIMIT 500";
+        sql += pinboardId is null
+            ? " ORDER BY c.copied_at DESC LIMIT 500"
+            : " ORDER BY e.display_order, c.copied_at DESC LIMIT 500";
         cmd.CommandText = sql;
         if (pinboardId is Guid board) cmd.Parameters.AddWithValue("$board", board.ToString());
         if (!string.IsNullOrWhiteSpace(type) && type != "all") cmd.Parameters.AddWithValue("$type", type);
@@ -187,6 +188,21 @@ internal sealed class Library
         return board;
     }
 
+    public void Touch(IReadOnlyList<Guid> ids)
+    {
+        if (ids.Count == 0) return;
+        using var db = Connect();
+        var now = DateTimeOffset.Now;
+        for (var i = 0; i < ids.Count; i++)
+        {
+            using var cmd = db.CreateCommand();
+            cmd.CommandText = "UPDATE clips SET copied_at = $at WHERE id = $id";
+            cmd.Parameters.AddWithValue("$at", now.AddMilliseconds(ids.Count - i).ToString("O"));
+            cmd.Parameters.AddWithValue("$id", ids[i].ToString());
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     public void AddToBoard(Guid boardId, Guid itemId)
     {
         using var db = Connect();
@@ -210,6 +226,64 @@ internal sealed class Library
             cmd.Parameters.AddWithValue("$id", id.ToString());
             cmd.ExecuteNonQuery();
         }
+    }
+
+    public void RemoveFromBoard(Guid boardId, Guid itemId)
+    {
+        using var db = Connect();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "DELETE FROM entries WHERE pinboard_id = $board AND item_id = $item";
+        cmd.Parameters.AddWithValue("$board", boardId.ToString());
+        cmd.Parameters.AddWithValue("$item", itemId.ToString());
+        cmd.ExecuteNonQuery();
+    }
+
+    public void RenameBoard(Guid id, string name)
+    {
+        using var db = Connect();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "UPDATE pinboards SET name = $name WHERE id = $id";
+        cmd.Parameters.AddWithValue("$name", name);
+        cmd.Parameters.AddWithValue("$id", id.ToString());
+        cmd.ExecuteNonQuery();
+    }
+
+    public void DeleteBoard(Guid id)
+    {
+        using var db = Connect();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "DELETE FROM entries WHERE pinboard_id = $id; DELETE FROM pinboards WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$id", id.ToString());
+        cmd.ExecuteNonQuery();
+    }
+
+    public int CountUnpinned()
+    {
+        using var db = Connect();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM clips WHERE id NOT IN (SELECT item_id FROM entries)";
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    public void ClearUnpinned()
+    {
+        using var db = Connect();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "DELETE FROM clips WHERE id NOT IN (SELECT item_id FROM entries)";
+        cmd.ExecuteNonQuery();
+    }
+
+    public void UpdateText(Guid id, string text)
+    {
+        var raw = System.Text.Encoding.UTF8.GetBytes(text);
+        using var db = Connect();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "UPDATE clips SET text_content = $text, raw_data = $raw, content_hash = $hash WHERE id = $id";
+        cmd.Parameters.AddWithValue("$text", text);
+        cmd.Parameters.AddWithValue("$raw", raw);
+        cmd.Parameters.AddWithValue("$hash", ClipboardCapture.Hash(raw));
+        cmd.Parameters.AddWithValue("$id", id.ToString());
+        cmd.ExecuteNonQuery();
     }
 
     public void Rename(Guid id, string title)

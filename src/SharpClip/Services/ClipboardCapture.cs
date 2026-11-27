@@ -9,6 +9,7 @@ internal sealed record CapturedClip(string ContentType, byte[] Raw, string? Text
 internal static class ClipboardCapture
 {
     private static int _skip;
+    internal static volatile bool SuppressCapture;
 
     public static void SkipNext() => Interlocked.Increment(ref _skip);
 
@@ -23,7 +24,7 @@ internal static class ClipboardCapture
         if (!Win32.OpenClipboard(IntPtr.Zero)) return null;
         try
         {
-            var source = ForegroundProcessName();
+            var source = ForegroundImagePath();
             if (Win32.IsClipboardFormatAvailable(Win32.CF_HDROP))
             {
                 var files = ReadFiles();
@@ -69,6 +70,34 @@ internal static class ClipboardCapture
         return null;
     }
 
+    public static void Place(ClipItem item, bool plain)
+    {
+        if (!plain && item.ContentType == "image" && item.Raw.Length > 0)
+        {
+            WriteImage(item.Raw);
+            return;
+        }
+        if (!plain && item.ContentType == "fileURL" && !string.IsNullOrWhiteSpace(item.Text))
+        {
+            var files = item.Text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+            if (files.Length > 0 && files.All(File.Exists))
+            {
+                WriteFiles(files);
+                return;
+            }
+        }
+        WriteText(item.Text ?? "", plain);
+    }
+
+    public static void PasteItemInto(IntPtr previous, ClipItem item, bool plain) =>
+        PasteItemInto(previous, IntPtr.Zero, item, plain);
+
+    public static void PasteItemInto(IntPtr previous, IntPtr focus, ClipItem item, bool plain)
+    {
+        Place(item, plain);
+        SendPaste(previous, focus);
+    }
+
     public static void WriteText(string text, bool plain)
     {
         var payload = plain ? text.Trim() : text;
@@ -90,15 +119,120 @@ internal static class ClipboardCapture
         }
     }
 
-    public static void PasteIntoPreviousApp(IntPtr previous, string text, bool plain)
+    public static void PasteIntoPreviousApp(IntPtr previous, string text, bool plain) =>
+        PasteIntoPreviousApp(previous, IntPtr.Zero, text, plain);
+
+    public static void PasteIntoPreviousApp(IntPtr previous, IntPtr focus, string text, bool plain)
     {
         WriteText(text, plain);
-        ForceForeground(previous);
-        var down = Key(Win32.VK_CONTROL, false);
-        var vDown = Key(Win32.VK_V, false);
-        var vUp = Key(Win32.VK_V, true);
-        var up = Key(Win32.VK_CONTROL, true);
-        Win32.SendInput(4, [down, vDown, vUp, up], Marshal.SizeOf<Win32.INPUT>());
+        SendPaste(previous, focus);
+    }
+
+    private static void SendPaste(IntPtr previous, IntPtr focus)
+    {
+        SuppressCapture = true;
+        try
+        {
+            var until = Environment.TickCount + 120;
+            do
+            {
+                ForceForeground(previous, focus);
+                if (previous == IntPtr.Zero || Win32.GetForegroundWindow() == previous) break;
+                Thread.Sleep(15);
+            }
+            while (Environment.TickCount < until);
+
+            // Shift is still held for Shift+Enter. Lift it so the target sees Ctrl+V,
+            // not Ctrl+Shift+V, which is the panel shortcut and a different command.
+            var shift = Down(0x10) || Down(0xA0) || Down(0xA1);
+            var alt = Down(0x12) || Down(0xA4) || Down(0xA5);
+            var win = Down(0x5B) || Down(0x5C);
+            if (shift) Tap(0x10, true);
+            if (alt) Tap(0x12, true);
+            if (win) Tap(0x5B, true);
+            Tap(Win32.VK_CONTROL, false);
+            Tap(Win32.VK_V, false);
+            Tap(Win32.VK_V, true);
+            Tap(Win32.VK_CONTROL, true);
+            if (win) Tap(0x5B, false);
+            if (alt) Tap(0x12, false);
+            if (shift) Tap(0x10, false);
+        }
+        finally
+        {
+            SuppressCapture = false;
+        }
+    }
+
+    private static void WriteImage(byte[] bytes)
+    {
+        System.Drawing.Bitmap? bitmap = null;
+        var hBitmap = IntPtr.Zero;
+        try
+        {
+            bitmap = new System.Drawing.Bitmap(new MemoryStream(bytes));
+            hBitmap = bitmap.GetHbitmap();
+        }
+        catch
+        {
+            bitmap?.Dispose();
+            return;
+        }
+
+        var png = Win32.RegisterClipboardFormat("PNG");
+        var pngMem = CopyToGlobal(bytes);
+        SkipNext();
+        if (!Win32.OpenClipboard(IntPtr.Zero))
+        {
+            if (hBitmap != IntPtr.Zero) Win32.DeleteObject(hBitmap);
+            bitmap.Dispose();
+            return;
+        }
+        try
+        {
+            Win32.EmptyClipboard();
+            Win32.SetClipboardData(2, hBitmap);
+            hBitmap = IntPtr.Zero;
+            if (png != 0 && pngMem != IntPtr.Zero) Win32.SetClipboardData(png, pngMem);
+        }
+        finally
+        {
+            Win32.CloseClipboard();
+            if (hBitmap != IntPtr.Zero) Win32.DeleteObject(hBitmap);
+            bitmap.Dispose();
+        }
+    }
+
+    private static void WriteFiles(string[] files)
+    {
+        var payload = string.Join('\0', files) + "\0\0";
+        var text = Encoding.Unicode.GetBytes(payload);
+        var bytes = new byte[20 + text.Length];
+        BitConverter.GetBytes(20).CopyTo(bytes, 0);
+        BitConverter.GetBytes(1).CopyTo(bytes, 16);
+        text.CopyTo(bytes, 20);
+        var mem = CopyToGlobal(bytes);
+        SkipNext();
+        if (!Win32.OpenClipboard(IntPtr.Zero) || mem == IntPtr.Zero) return;
+        try
+        {
+            Win32.EmptyClipboard();
+            Win32.SetClipboardData(Win32.CF_HDROP, mem);
+        }
+        finally
+        {
+            Win32.CloseClipboard();
+        }
+    }
+
+    private static IntPtr CopyToGlobal(byte[] bytes)
+    {
+        var mem = Win32.GlobalAlloc(Win32.GMEM_MOVEABLE, (nuint)bytes.Length);
+        if (mem == IntPtr.Zero) return IntPtr.Zero;
+        var locked = Win32.GlobalLock(mem);
+        Marshal.Copy(bytes, 0, locked, bytes.Length);
+        Win32.GlobalUnlock(mem);
+        return mem;
     }
 
     public static string Hash(byte[] data)
@@ -107,6 +241,12 @@ internal static class ClipboardCapture
     }
 
     public static string? ForegroundProcessName()
+    {
+        var path = ForegroundImagePath();
+        return string.IsNullOrEmpty(path) ? null : Path.GetFileName(path);
+    }
+
+    private static string? ForegroundImagePath()
     {
         var hwnd = Win32.GetForegroundWindow();
         if (hwnd == IntPtr.Zero) return null;
@@ -118,7 +258,7 @@ internal static class ClipboardCapture
             var buffer = new char[1024];
             var size = buffer.Length;
             if (!Win32.QueryFullProcessImageName(process, 0, buffer, ref size)) return null;
-            return Path.GetFileName(new string(buffer, 0, size));
+            return new string(buffer, 0, size);
         }
         finally
         {
@@ -203,24 +343,35 @@ internal static class ClipboardCapture
         return at < 0 ? -1 : at + mark.Length;
     }
 
-    private static void ForceForeground(IntPtr hwnd)
+    private static void ForceForeground(IntPtr hwnd, IntPtr focus)
     {
         if (hwnd == IntPtr.Zero) return;
         var foreground = Win32.GetForegroundWindow();
-        var foreThread = Win32.GetWindowThreadProcessId(foreground, out _);
+        var foreThread = foreground == IntPtr.Zero ? 0 : Win32.GetWindowThreadProcessId(foreground, out _);
+        var targetThread = Win32.GetWindowThreadProcessId(hwnd, out _);
         var thisThread = Win32.GetCurrentThreadId();
-        Win32.AttachThreadInput(thisThread, foreThread, true);
-        Win32.SetForegroundWindow(hwnd);
-        Win32.AttachThreadInput(thisThread, foreThread, false);
+        var attachFore = foreThread != 0 && foreThread != thisThread && Win32.AttachThreadInput(thisThread, foreThread, true);
+        var attachTarget = targetThread != 0 && targetThread != thisThread && targetThread != foreThread && Win32.AttachThreadInput(thisThread, targetThread, true);
+        try
+        {
+            // A momentary Alt lets this process move the foreground back to the app
+            // that was active before the panel opened.
+            Win32.keybd_event(0x12, 0, 0, UIntPtr.Zero);
+            Win32.keybd_event(0x12, 0, Win32.KEYEVENTF_KEYUP, UIntPtr.Zero);
+            Win32.ShowWindow(hwnd, 5);
+            Win32.BringWindowToTop(hwnd);
+            Win32.SwitchToThisWindow(hwnd, true);
+            Win32.SetForegroundWindow(hwnd);
+            if (focus != IntPtr.Zero) Win32.SetFocus(focus);
+        }
+        finally
+        {
+            if (attachTarget) Win32.AttachThreadInput(thisThread, targetThread, false);
+            if (attachFore) Win32.AttachThreadInput(thisThread, foreThread, false);
+        }
     }
 
-    private static Win32.INPUT Key(uint vk, bool up) => new()
-    {
-        type = Win32.INPUT_KEYBOARD,
-        ki = new Win32.KEYBDINPUT
-        {
-            wVk = (ushort)vk,
-            dwFlags = up ? Win32.KEYEVENTF_KEYUP : 0,
-        },
-    };
+    private static bool Down(int vk) => (Win32.GetAsyncKeyState(vk) & 0x8000) != 0;
+
+    private static void Tap(uint vk, bool up) => Win32.keybd_event((byte)vk, 0, up ? Win32.KEYEVENTF_KEYUP : 0, UIntPtr.Zero);
 }

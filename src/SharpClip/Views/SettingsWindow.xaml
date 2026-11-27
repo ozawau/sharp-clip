@@ -4,27 +4,264 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="SharpClip">
-    <ScrollViewer Padding="24">
-        <StackPanel Spacing="12" MaxWidth="520">
-            <TextBlock x:Name="LanguageLabel" />
-            <ComboBox x:Name="LanguageBox" HorizontalAlignment="Stretch" SelectionChanged="OnLanguageChanged" />
-            <TextBlock x:Name="LimitLabel" />
-            <ComboBox x:Name="LimitBox" HorizontalAlignment="Stretch" SelectionChanged="OnLimitChanged" />
-            <ToggleSwitch x:Name="PasteSwitch" Toggled="OnPasteToggled" />
-            <ToggleSwitch x:Name="PlainSwitch" Toggled="OnPlainToggled" />
-            <ToggleSwitch x:Name="LoginSwitch" Toggled="OnLoginToggled" />
-            <ToggleSwitch x:Name="MonitorSwitch" Toggled="OnMonitorToggled" />
-            <TextBlock x:Name="ExcludeLabel" />
-            <ListView x:Name="ExcludeList" Height="140" />
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button x:Name="ExcludeButton" Click="OnExcludeForeground" />
-                <Button x:Name="UnexcludeButton" Click="OnUnexclude" />
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button x:Name="ExportButton" Click="OnExport" />
-                <Button x:Name="ImportButton" Click="OnImport" />
-            </StackPanel>
-            <TextBlock Opacity="0.7" TextWrapping="Wrap" Text="Ctrl+Shift+V opens history. Ctrl+Shift+Q toggles Clip Queue. sharpclip://open, sharpclip://toggle, and sharpclip://queue work as well." />
-        </StackPanel>
-    </ScrollViewer>
+    <Grid x:Name="Root" PreviewKeyDown="OnPreviewKey">
+        <Grid.Resources>
+            <Style x:Key="Card" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="Padding" Value="14,12" />
+            </Style>
+        </Grid.Resources>
+        <NavigationView
+            x:Name="Nav"
+            AlwaysShowHeader="False"
+            IsBackButtonVisible="Collapsed"
+            IsPaneToggleButtonVisible="False"
+            IsSettingsVisible="False"
+            PaneDisplayMode="Top"
+            SelectionChanged="OnNavChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem x:Name="NavGeneral" Tag="general">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE713;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="NavAppearance" Tag="appearance">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE790;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="NavShortcuts" Tag="shortcuts">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE765;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="NavExclusions" Tag="exclusions">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE711;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="NavAbout" Tag="about">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE946;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+            <ScrollViewer>
+                <Grid Margin="20,8,20,20">
+                    <StackPanel x:Name="PageGeneral" Spacing="16">
+                        <TextBlock x:Name="PastingHeader" FontSize="12" Opacity="0.7" />
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel Spacing="14">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" Margin="0,0,12,0">
+                                        <TextBlock x:Name="PasteTitle" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="PasteInfo" FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="PasteHelp" FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ToggleSwitch x:Name="PasteSwitch" Grid.Column="1" MinWidth="0" OffContent="" OnContent="" Toggled="OnPasteToggled" />
+                                </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" Margin="0,0,12,0">
+                                        <TextBlock x:Name="PlainTitle" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="PlainInfo" FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="PlainHelp" FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ToggleSwitch x:Name="PlainSwitch" Grid.Column="1" MinWidth="0" OffContent="" OnContent="" Toggled="OnPlainToggled" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel Spacing="14">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="180" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="LanguageLabel" VerticalAlignment="Center" />
+                                    <ComboBox x:Name="LanguageBox" Grid.Column="1" HorizontalAlignment="Stretch" SelectionChanged="OnLanguageChanged" />
+                                </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="180" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="LimitLabel" VerticalAlignment="Center" />
+                                    <ComboBox x:Name="LimitBox" Grid.Column="1" HorizontalAlignment="Stretch" SelectionChanged="OnLimitChanged" />
+                                </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="LoginTitle" VerticalAlignment="Center" />
+                                    <ToggleSwitch x:Name="LoginSwitch" Grid.Column="1" MinWidth="0" OffContent="" OnContent="" Toggled="OnLoginToggled" />
+                                </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" Margin="0,0,12,0">
+                                        <TextBlock x:Name="TrayTitle" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="TrayHelp" FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ToggleSwitch x:Name="TraySwitch" Grid.Column="1" MinWidth="0" OffContent="" OnContent="" Toggled="OnTrayToggled" />
+                                </Grid>
+                                <Button x:Name="QuitButton" HorizontalAlignment="Left" Click="OnQuit" />
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock x:Name="BackupHeader" FontSize="12" Opacity="0.7" />
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel Spacing="12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="ExportHelp" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,12,0" />
+                                    <Button x:Name="ExportButton" Grid.Column="1" Click="OnExport" />
+                                </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="ImportHelp" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,12,0" />
+                                    <Button x:Name="ImportButton" Grid.Column="1" Click="OnImport" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel x:Name="PageAppearance" Spacing="16" Visibility="Collapsed">
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel Spacing="14">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="180" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="ThemeLabel" VerticalAlignment="Center" />
+                                    <ComboBox x:Name="ThemeBox" Grid.Column="1" HorizontalAlignment="Stretch" SelectionChanged="OnThemeChanged" />
+                                </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" Margin="0,0,12,0">
+                                        <TextBlock x:Name="AnimateTitle" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="AnimateHelp" FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ToggleSwitch x:Name="AnimateSwitch" Grid.Column="1" MinWidth="0" OffContent="" OnContent="" Toggled="OnAnimateToggled" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel x:Name="PageShortcuts" Spacing="8" Visibility="Collapsed">
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel Spacing="16">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" Margin="0,0,12,0">
+                                        <TextBlock x:Name="PanelTitle" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="PanelHelp" FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <Button x:Name="PanelRecord" Grid.Column="1" MinWidth="148" Click="OnRecord" Tag="panel" />
+                                    <Button x:Name="PanelUnset" Grid.Column="2" Width="32" Margin="8,0,0,0" Click="OnUnset" Tag="panel" Content="&#x00D7;" />
+                                </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" Margin="0,0,12,0">
+                                        <TextBlock x:Name="QueueTitle" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="QueueInfo" FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="QueueHelp" FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <Button x:Name="QueueRecord" Grid.Column="1" MinWidth="148" VerticalAlignment="Center" Click="OnRecord" Tag="queue" />
+                                    <Button x:Name="QueueUnset" Grid.Column="2" Width="32" Margin="8,0,0,0" VerticalAlignment="Center" Click="OnUnset" Tag="queue" Content="&#x00D7;" />
+                                </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="ClearTitle" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,12,0" />
+                                    <Button x:Name="ClearRecord" Grid.Column="1" MinWidth="148" Click="OnRecord" Tag="clear" />
+                                    <Button x:Name="ClearUnset" Grid.Column="2" Width="32" Margin="8,0,0,0" Click="OnUnset" Tag="clear" Content="&#x00D7;" />
+                                </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" Margin="0,0,12,0">
+                                        <TextBlock x:Name="QuickTitle" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="QuickInfo" FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="QuickHelp" FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <Button x:Name="QuickRecord" Grid.Column="1" MinWidth="148" VerticalAlignment="Center" Click="OnRecord" Tag="quick" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                        <TextBlock x:Name="TabNavHeader" FontSize="12" Opacity="0.7" Margin="0,8,0,0" />
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel Spacing="8">
+                                <Grid>
+                                    <TextBlock x:Name="TabHistoryLabel" />
+                                    <TextBlock HorizontalAlignment="Right" Opacity="0.7" Text="Ctrl+1" />
+                                </Grid>
+                                <Grid>
+                                    <TextBlock x:Name="TabBoardsLabel" />
+                                    <TextBlock HorizontalAlignment="Right" Opacity="0.7" Text="Ctrl+2 – Ctrl+9" />
+                                </Grid>
+                                <TextBlock x:Name="TabNavHelp" FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock x:Name="ShortcutStatus" FontSize="12" Opacity="0.8" TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <StackPanel x:Name="PageExclusions" Spacing="12" Visibility="Collapsed">
+                        <TextBlock x:Name="ExcludeHelp" Opacity="0.7" TextWrapping="Wrap" />
+                        <ListView x:Name="ExcludeList" Height="260" SelectionChanged="OnExcludeSelection" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="ExcludeAdd" Width="36" Click="OnExcludeAdd" Content="+" />
+                            <Button x:Name="ExcludeRemove" Width="36" Click="OnExcludeRemove" Content="&#x2212;" IsEnabled="False" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <Grid x:Name="PageAbout" Visibility="Collapsed">
+                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="10" Margin="0,24">
+                            <FontIcon Glyph="&#xE8C8;" FontSize="56" HorizontalAlignment="Center" />
+                            <TextBlock x:Name="AboutName" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" Text="SharpClip" />
+                            <TextBlock x:Name="AboutVersion" Opacity="0.7" HorizontalAlignment="Center" />
+                            <TextBlock x:Name="AboutBody" Opacity="0.7" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+            </ScrollViewer>
+        </NavigationView>
+    </Grid>
 </Window>

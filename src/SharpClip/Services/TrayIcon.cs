@@ -7,26 +7,48 @@ internal static class TrayIcon
     public const int CallbackMessage = Win32.WM_APP + 1;
     private const uint IconId = 1;
     private static IntPtr _hwnd;
+    private static bool _added;
 
-    public static void Attach(IntPtr hwnd)
+    public static void Bind(IntPtr hwnd) => _hwnd = hwnd;
+
+    public static void SetVisible(bool visible)
     {
-        _hwnd = hwnd;
+        if (_hwnd == IntPtr.Zero || visible == _added) return;
         var data = Data();
-        Win32.Shell_NotifyIcon(Win32.NIM_ADD, ref data);
+        if (visible)
+        {
+            if (!Win32.Shell_NotifyIcon(Win32.NIM_ADD, ref data))
+            {
+                Win32.Shell_NotifyIcon(Win32.NIM_DELETE, ref data);
+                _added = Win32.Shell_NotifyIcon(Win32.NIM_ADD, ref data);
+            }
+            else
+            {
+                _added = true;
+            }
+        }
+        else
+        {
+            Win32.Shell_NotifyIcon(Win32.NIM_DELETE, ref data);
+            _added = false;
+        }
     }
 
     public static void Refresh()
     {
-        if (_hwnd == IntPtr.Zero) return;
+        if (!_added || _hwnd == IntPtr.Zero) return;
         var data = Data();
         Win32.Shell_NotifyIcon(Win32.NIM_MODIFY, ref data);
     }
 
     public static void Remove()
     {
-        if (_hwnd == IntPtr.Zero) return;
-        var data = Data();
-        Win32.Shell_NotifyIcon(Win32.NIM_DELETE, ref data);
+        if (_added && _hwnd != IntPtr.Zero)
+        {
+            var data = Data();
+            Win32.Shell_NotifyIcon(Win32.NIM_DELETE, ref data);
+            _added = false;
+        }
         _hwnd = IntPtr.Zero;
     }
 
@@ -82,14 +104,13 @@ internal static class TrayIcon
 
     public static void Paste(ClipItem item, IntPtr previous, bool plain)
     {
-        var text = item.Text ?? "";
         if (SettingsStore.Current.PasteIntoActiveApp && previous != IntPtr.Zero)
         {
-            ClipboardCapture.PasteIntoPreviousApp(previous, text, plain);
+            ClipboardCapture.PasteItemInto(previous, item, plain);
         }
         else
         {
-            ClipboardCapture.WriteText(text, plain);
+            ClipboardCapture.Place(item, plain);
         }
     }
 
