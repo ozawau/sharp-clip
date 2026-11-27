@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="SharpClip.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="SharpClip">
+    <ScrollViewer Padding="24">
+        <StackPanel Spacing="12" MaxWidth="520">
+            <TextBlock x:Name="LanguageLabel" />
+            <ComboBox x:Name="LanguageBox" HorizontalAlignment="Stretch" SelectionChanged="OnLanguageChanged" />
+            <TextBlock x:Name="LimitLabel" />
+            <ComboBox x:Name="LimitBox" HorizontalAlignment="Stretch" SelectionChanged="OnLimitChanged" />
+            <ToggleSwitch x:Name="PasteSwitch" Toggled="OnPasteToggled" />
+            <ToggleSwitch x:Name="PlainSwitch" Toggled="OnPlainToggled" />
+            <ToggleSwitch x:Name="LoginSwitch" Toggled="OnLoginToggled" />
+            <ToggleSwitch x:Name="MonitorSwitch" Toggled="OnMonitorToggled" />
+            <TextBlock x:Name="ExcludeLabel" />
+            <ListView x:Name="ExcludeList" Height="140" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Name="ExcludeButton" Click="OnExcludeForeground" />
+                <Button x:Name="UnexcludeButton" Click="OnUnexclude" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Name="ExportButton" Click="OnExport" />
+                <Button x:Name="ImportButton" Click="OnImport" />
+            </StackPanel>
+            <TextBlock Opacity="0.7" TextWrapping="Wrap" Text="Ctrl+Shift+V opens history. Ctrl+Shift+Q toggles Clip Queue. sharpclip://open, sharpclip://toggle, and sharpclip://queue work as well." />
+        </StackPanel>
+    </ScrollViewer>
+</Window>
