@@ -1,17 +1,92 @@
 # SharpClip
 
-Windows clipboard manager with the same desktop behavior as Clipbara. It is free: there is no trial, purchase, or restore-purchases entry.
+Windows 上的剪贴板管理器。复制过的文字、图片、链接、文件和颜色会留在本机，需要时从底部面板贴回去。
 
-Ctrl+Shift+V opens a history panel at the bottom of the screen. Click a clip, or press Enter, to put it back. Clip Queue has no default hotkey; start it from the tray, or record one in Settings. Settings include language (follow system, English, 한국어, 简体中文), history limit, paste into the active app, plain-text paste, launch at login, excluded apps, and JSON import/export. The JSON matches Clipbara's backup.
+完全免费：没有账号，没有试用，没有购买，也不上传使用数据。
 
-iCloud sync and the iPhone keyboard are not part of this app. Windows cannot join Clipbara's CloudKit database.
+需要 Windows 10 版本 2004（内部版本 19041）或更高版本。
 
-## Build
+## 历史面板
 
-Windows 10 version 2004 (build 19041) or later, the .NET 8 SDK, and the Windows App SDK build tools. The app targets the 21H2 API set.
+默认按 `Ctrl+Shift+V` 打开。面板贴在鼠标所在屏幕的底部，铺满工作区宽度。再按一次热键，或点击面板外面，就会关上。启动时不会抢占当前窗口的焦点，也不会自己弹出面板。
+
+面板打开后可以直接打字搜索。搜索框默认没有焦点，第一个字母会交给输入法，这样中文可以正常组字。`Esc` 先关掉预览、取消多选、清空搜索，再回到「历史」，最后关闭面板。
+
+## 卡片
+
+每一条记录是一张横向卡片，最新的在最左边。左上角是类型名和图标，右上角是来源应用图标。悬停时卡片从中心放大，并盖在相邻卡片上面。
+
+支持这些类型：
+
+- 纯文本、富文本、HTML
+- 图片（粘贴回去仍是图片）
+- 链接（`http` / `https`）
+- 文件（多个文件会按文件列表贴回）
+- 颜色（剪贴板里真的带颜色数据时）
+
+单击卡片，或按 `Enter`，会把它写回剪贴板并关掉面板。默认还会向打开面板之前的那个窗口发送 `Ctrl+V`。按住 `Shift` 只改变这一次是保留格式还是纯文本。
+
+`Ctrl` 或 `Shift` 单击可以多选。多选后按 `Enter`，选中的文本会用换行拼在一起再粘贴。`Delete` 删除选中项，`Ctrl+Z` 撤销最近一次删除。
+
+卡片可以拖到某个 Pinboard 标签上加入该板，也可以拖到别的程序。
+
+## Pinboard
+
+除了「历史」，最多可以有 8 个 Pinboard，用 `Ctrl+2` 到 `Ctrl+9` 切换，`Ctrl+1` 回到历史。标签可以拖动排序，也可以改颜色。「历史」只能改颜色。删掉一块 Pinboard 不会删掉剪贴记录本身。
+
+放在 Pinboard 上的条目不受历史条数上限影响。
+
+## Quick Look
+
+面板打开时按 `Space` 在旁边预览当前卡片。文本可以选中，并显示字数、词数和行数。图片可以缩放和平移。文本类记录可以用 `Ctrl+E` 编辑；输入法还在组字时，`Enter` 不会保存。
+
+## 剪贴队列
+
+从托盘开始队列后，之后每次复制都会排进队列。默认从最旧的一条开始。在目标程序里按 `Ctrl+V` 才会取下一条；别的程序只是读取剪贴板时，队列不会往前走。队列没有默认热键，可以在设置里录一个。
+
+## 托盘和设置
+
+托盘里有最近 5 条、暂停或恢复监控、打开历史、开始或结束队列、检查更新、反馈、设置和退出。检查更新不会联网，只说明当前版本已是最新。
+
+设置会立刻保存，包括：
+
+- 语言：跟随系统、English、한국어、简体中文
+- 粘贴到当前应用、总是粘贴纯文本
+- 历史条数：100、500、1000、5000 或不限制，默认 500
+- 登录时启动、显示托盘图标
+- 主题：跟随系统、浅色、深色
+- 面板动画
+- 热键
+- 排除指定程序，那些程序里的复制不会进入历史
+- 导出和导入 JSON
+
+数据在 `%LocalAppData%\SharpClip\`。数据库打不开时，旧文件会挪到隔离目录再新建，不会直接删掉。
+
+也可以用链接控制已经在运行的程序：`sharpclip://open`、`sharpclip://toggle`、`sharpclip://queue`。
+
+## 默认快捷键
+
+| 操作 | 快捷键 |
+| --- | --- |
+| 打开或关闭历史 | `Ctrl+Shift+V` |
+| 历史 / Pinboard | `Ctrl+1` … `Ctrl+9` |
+| 预览 | `Space`（仅面板打开时） |
+| 编辑文本 | `Ctrl+E` |
+| 清空不在 Pinboard 上的历史 | `Ctrl+Shift+Backspace` |
+| 撤销删除 | `Ctrl+Z` |
+
+## 构建
+
+需要 .NET 8 SDK。
 
 ```powershell
-dotnet build src/SharpClip/SharpClip.csproj -c Release
+dotnet build src/SharpClip/SharpClip.csproj -c Release -r win-x64
 ```
 
-The output is an unpackaged `SharpClip.exe`. This repository is authored on a Mac; the project compiles on Windows.
+可直接运行的程序是自包含目录，不能只拷贝 `SharpClip.exe`：
+
+```powershell
+dotnet publish src/SharpClip/SharpClip.csproj -c Release -r win-x64 --self-contained true -o dist/SharpClip-win-x64
+```
+
+更完整的行为说明见 [功能说明](ACCEPTANCE.md)。
