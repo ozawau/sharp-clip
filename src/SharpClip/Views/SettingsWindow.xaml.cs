@@ -20,6 +20,7 @@ public sealed partial class SettingsWindow : Window
     public SettingsWindow()
     {
         InitializeComponent();
+        WindowIcon.Apply(this);
         AppWindow.Closing += (_, args) =>
         {
             args.Cancel = true;

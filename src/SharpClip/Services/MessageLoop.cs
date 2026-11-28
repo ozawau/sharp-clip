@@ -214,7 +214,7 @@ internal sealed class WindowMessageLoop
                 var up = message is Win32.WM_KEYUP or Win32.WM_SYSKEYUP || (info.flags & 0x80) != 0;
                 var injected = (info.flags & 0x10) != 0;
                 if (!up && !injected) ClipQueue.NoteKeyDown();
-                if (ClipboardCapture.SuppressCapture)
+                if (ClipboardCapture.SuppressCapture || injected)
                     return Win32.CallNextHookEx(_keyboardHook, code, wParam, lParam);
                 if (up)
                 {
