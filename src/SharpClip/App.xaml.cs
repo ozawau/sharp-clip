@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 
@@ -11,6 +12,7 @@ public partial class App : Application
     private WindowMessageLoop? _loop;
     private HistoryWindow? _history;
     private SettingsWindow? _settings;
+    private WelcomeWindow? _welcome;
 
     public static App Instance { get; private set; } = null!;
 
@@ -23,30 +25,28 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        var foreground = Win32.GetForegroundWindow();
         _instance = new Mutex(false, @"Local\SharpClip.SingleInstance");
         try
         {
             if (!_instance.WaitOne(0))
             {
-                SignalRunningInstance();
+                SignalRunningInstance(Environment.GetCommandLineArgs().Skip(1).FirstOrDefault());
                 Exit();
                 return;
             }
         }
         catch (AbandonedMutexException)
         {
-            // The previous process exited without releasing the mutex. We own it now.
         }
 
         _ui = DispatcherQueue.GetForCurrentThread();
         Library.Shared.Open();
         SettingsStore.Load();
         Strings.Apply(SettingsStore.Current.Language);
+        ProtocolRegistration.Register();
+        if (SettingsStore.Current.LaunchAtLogin) StartupRegistration.SetEnabled(true);
 
-        _history = new HistoryWindow();
-        _settings = new SettingsWindow();
-        _history.HideOffscreen();
-        _settings.HideOffscreen();
         _activate = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\SharpClip.Activate");
         ThreadPool.RegisterWaitForSingleObject(_activate, (_, _) => Instance.ActivatedFromAnotherLaunch(), null, Timeout.Infinite, false);
 
@@ -55,20 +55,29 @@ public partial class App : Application
         _loop.ClipboardChanged += OnClipboard;
         _loop.HotkeysApplied += () => RunOnUi(() => _settings?.RefreshHotkeyStatus());
         _loop.Start();
-        ProtocolRegistration.Register();
-        if (SettingsStore.Current.LaunchAtLogin)
-        {
-            StartupRegistration.SetEnabled(true);
-        }
 
-        var command = Environment.GetCommandLineArgs().Skip(1).FirstOrDefault();
-        if (!string.IsNullOrWhiteSpace(command))
+        var queue = _ui;
+        queue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
-            HandleUrl(command);
-        }
+            var timer = queue.CreateTimer();
+            timer.Interval = TimeSpan.FromMilliseconds(300);
+            timer.IsRepeating = false;
+            timer.Tick += (_, _) =>
+            {
+                var before = Win32.GetForegroundWindow();
+                EnsureHistory().Preheat();
+                if (before != IntPtr.Zero) Win32.SetForegroundWindow(before);
+                if (!SettingsStore.Current.WelcomeCompleted) ShowWelcome();
+            };
+            timer.Start();
+        });
+
+        if (foreground != IntPtr.Zero) Win32.SetForegroundWindow(foreground);
+        var command = Environment.GetCommandLineArgs().Skip(1).FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(command)) HandleUrl(command);
     }
 
-    public void ShowHistory() => RunOnUi(() => _history?.Toggle());
+    public void ShowHistory() => RunOnUi(() => EnsureHistory().Toggle());
 
     public bool PanelWantsKeys => _history?.IsShown == true;
 
@@ -76,28 +85,96 @@ public partial class App : Application
 
     public void RoutePanelKey(int vk) => RunOnUi(() => _history?.InjectKey(vk));
 
-    private void ActivatedFromAnotherLaunch() => RunOnUi(() =>
+    public void QueuePasted() => RunOnUi(() => ClipQueue.ConsumePasted());
+
+    public void NotifyPaste(bool landed) => RunOnUi(() =>
     {
-        if (!SettingsStore.Current.ShowTrayIcon) ShowSettings();
-        else _history?.Present();
+        if (landed) PasteToast.Show();
+        else PasteToast.ShowFailed();
     });
 
-    private static void SignalRunningInstance()
+    public void OnDisplayChanged() => RunOnUi(() => _history?.OnDisplayChanged());
+
+    public void Restart()
+    {
+        RunOnUi(() =>
+        {
+            var path = Environment.ProcessPath;
+            try
+            {
+                _instance?.ReleaseMutex();
+            }
+            catch
+            {
+            }
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            }
+            Quit();
+        });
+    }
+
+    private void ActivatedFromAnotherLaunch() => RunOnUi(() =>
+    {
+        var command = TakePendingCommand();
+        if (!string.IsNullOrWhiteSpace(command) && command != "toggle")
+        {
+            HandleUrl(command.Contains("://", StringComparison.Ordinal) ? command : "sharpclip://" + command);
+            return;
+        }
+        EnsureHistory().Toggle();
+    });
+
+    private static void SignalRunningInstance(string? command)
     {
         try
         {
+            var path = PendingPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, string.IsNullOrWhiteSpace(command) ? "toggle" : command);
             using var signal = EventWaitHandle.OpenExisting(@"Local\SharpClip.Activate");
             signal.Set();
         }
         catch (WaitHandleCannotBeOpenedException)
         {
         }
+        catch (IOException)
+        {
+        }
     }
+
+    private static string TakePendingCommand()
+    {
+        try
+        {
+            var path = PendingPath();
+            if (!File.Exists(path)) return "";
+            var text = File.ReadAllText(path).Trim();
+            File.Delete(path);
+            return text;
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private static string PendingPath() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "SharpClip",
+        "pending-command.txt");
 
     public void ShowSettings() => RunOnUi(() =>
     {
         _history?.DismissForSettings();
-        _settings?.Present();
+        EnsureSettings().Present();
+    });
+
+    public void ShowWelcome() => RunOnUi(() =>
+    {
+        _welcome ??= new WelcomeWindow();
+        _welcome.Present();
     });
 
     public void ApplyPreferences(bool refreshHistory)
@@ -115,6 +192,7 @@ public partial class App : Application
 
     public void Quit() => RunOnUi(() =>
     {
+        ClipQueue.Stop();
         _loop?.Stop();
         TrayIcon.Remove();
         Exit();
@@ -124,7 +202,7 @@ public partial class App : Application
     {
         if (id == HotkeyIds.Panel) ShowHistory();
         else if (id == HotkeyIds.Queue) RunOnUi(() => ClipQueue.Toggle());
-        else if (id == HotkeyIds.Clear) RunOnUi(() => _history?.RequestClear());
+        else if (id == HotkeyIds.Clear) RunOnUi(() => EnsureHistory().RequestClear());
     }
 
     private void OnClipboard()
@@ -135,10 +213,20 @@ public partial class App : Application
             var captured = ClipboardCapture.Read();
             if (captured is null) return;
             var item = Library.Shared.Record(captured);
-            if (item is not null && ClipQueue.IsActive)
+            if (item is null) return;
+            if (item.ContentType == "image")
             {
-                ClipQueue.Push(item);
+                var id = item.Id;
+                var raw = item.Raw;
+                Task.Run(() =>
+                {
+                    var thumb = Images.ThumbnailPng(raw);
+                    if (thumb is null) return;
+                    Library.Shared.StoreThumbnail(id, thumb);
+                    RunOnUi(() => _history?.Reload());
+                });
             }
+            if (ClipQueue.IsActive) ClipQueue.Push(item);
             _history?.Reload();
             TrayIcon.Refresh();
         });
@@ -151,11 +239,11 @@ public partial class App : Application
         {
             return;
         }
-        var command = url.Split("://", 2)[1].Trim('/').ToLowerInvariant();
+        var command = url.Split("://", 2)[1].Trim('/').Split('?', '#')[0].ToLowerInvariant();
         switch (command)
         {
             case "open":
-                RunOnUi(() => _history?.Present());
+                RunOnUi(() => EnsureHistory().Present());
                 break;
             case "toggle":
                 ShowHistory();
@@ -164,6 +252,26 @@ public partial class App : Application
                 RunOnUi(() => ClipQueue.Toggle());
                 break;
         }
+    }
+
+    public HistoryWindow RecreateHistory()
+    {
+        var old = _history;
+        _history = new HistoryWindow();
+        old?.ForceClose();
+        return _history;
+    }
+
+    private HistoryWindow EnsureHistory()
+    {
+        _history ??= new HistoryWindow();
+        return _history;
+    }
+
+    private SettingsWindow EnsureSettings()
+    {
+        _settings ??= new SettingsWindow();
+        return _settings;
     }
 
     private void RunOnUi(Action action)

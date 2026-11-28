@@ -12,6 +12,9 @@ internal sealed class WindowMessageLoop
     private Thread? _thread;
     private IntPtr _hwnd;
     private IntPtr _keyboardHook;
+    private IntPtr _foregroundHook;
+    private int _lastHotkeyTick = int.MinValue;
+    private readonly Win32.WinEventDelegate _foregroundProc;
     private int _swallowed;
     private bool _captureTyping;
     private volatile bool _hotkeysOn = true;
@@ -26,6 +29,7 @@ internal sealed class WindowMessageLoop
     {
         _proc = Proc;
         _keyboardProc = OnKeyboard;
+        _foregroundProc = OnForeground;
     }
 
     public void Start()
@@ -67,6 +71,8 @@ internal sealed class WindowMessageLoop
             0, 0, 0, 0,
             IntPtr.Zero, IntPtr.Zero, wndClass.hInstance, IntPtr.Zero);
         Win32.AddClipboardFormatListener(_hwnd);
+        ClipQueue.Bind(_hwnd);
+        _foregroundHook = Win32.SetWinEventHook(Win32.EVENT_SYSTEM_FOREGROUND, Win32.EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, _foregroundProc, 0, 0, Win32.WINEVENT_OUTOFCONTEXT);
         _keyboardHook = Win32.SetWindowsHookEx(Win32.WH_KEYBOARD_LL, _keyboardProc, Win32.GetModuleHandle(null), 0);
         if (_keyboardHook == IntPtr.Zero) BindHotkeys();
         TrayIcon.Bind(_hwnd);
@@ -83,6 +89,11 @@ internal sealed class WindowMessageLoop
             Win32.UnhookWindowsHookEx(_keyboardHook);
             _keyboardHook = IntPtr.Zero;
         }
+        if (_foregroundHook != IntPtr.Zero)
+        {
+            Win32.UnhookWinEvent(_foregroundHook);
+            _foregroundHook = IntPtr.Zero;
+        }
         UnregisterAll();
         Win32.RemoveClipboardFormatListener(_hwnd);
         TrayIcon.Remove();
@@ -94,9 +105,38 @@ internal sealed class WindowMessageLoop
         switch (msg)
         {
             case Win32.WM_CLIPBOARDUPDATE:
-                if (ClipboardCapture.ConsumeSkip()) return IntPtr.Zero;
+                if (ClipboardCapture.ConsumeSkip() || ClipboardCapture.IsOwnUpdate()) return IntPtr.Zero;
                 ClipboardChanged?.Invoke();
                 return IntPtr.Zero;
+            case Win32.WM_RENDERFORMAT:
+                ClipQueue.Render((uint)wParam.ToInt32());
+                return IntPtr.Zero;
+            case Win32.WM_RENDERALLFORMATS:
+                if (Win32.OpenClipboard(hwnd))
+                {
+                    try
+                    {
+                        ClipQueue.RenderPromised();
+                    }
+                    finally
+                    {
+                        Win32.CloseClipboard();
+                    }
+                }
+                return IntPtr.Zero;
+            case Win32.WM_QUEUE_PLACE:
+                ClipQueue.PlaceNow();
+                return IntPtr.Zero;
+            case Win32.WM_QUEUE_TICK:
+                ClipQueue.Tick(wParam.ToInt32(), lParam != IntPtr.Zero);
+                return IntPtr.Zero;
+            case Win32.WM_DISPLAYCHANGE:
+                App.Instance.OnDisplayChanged();
+                return IntPtr.Zero;
+            case Win32.WM_MEASUREITEM:
+                return TrayIcon.Measure(lParam) ? (IntPtr)1 : Win32.DefWindowProc(hwnd, msg, wParam, lParam);
+            case Win32.WM_DRAWITEM:
+                return TrayIcon.Draw(lParam) ? (IntPtr)1 : Win32.DefWindowProc(hwnd, msg, wParam, lParam);
             case Win32.WM_HOTKEY:
                 HotkeyPressed?.Invoke(wParam.ToInt32());
                 return IntPtr.Zero;
@@ -172,6 +212,8 @@ internal sealed class WindowMessageLoop
                 var vk = (int)info.vkCode;
                 var message = wParam.ToInt32();
                 var up = message is Win32.WM_KEYUP or Win32.WM_SYSKEYUP || (info.flags & 0x80) != 0;
+                var injected = (info.flags & 0x10) != 0;
+                if (!up && !injected) ClipQueue.NoteKeyDown();
                 if (ClipboardCapture.SuppressCapture)
                     return Win32.CallNextHookEx(_keyboardHook, code, wParam, lParam);
                 if (up)
@@ -195,8 +237,16 @@ internal sealed class WindowMessageLoop
                         var id = Match(vk, CtrlDown(), ShiftDown(), AltDown(info.flags), WinDown());
                         if (id != 0)
                         {
+                            var now = Environment.TickCount;
+                            if (now - _lastHotkeyTick >= 0 && now - _lastHotkeyTick < 100)
+                            {
+                                _lastHotkeyTick = now;
+                                return (IntPtr)1;
+                            }
+                            _lastHotkeyTick = now;
                             _swallowed = vk;
                             _captureTyping = false;
+                            if (TrayIcon.MenuOpen) Win32.PostMessage(_hwnd, Win32.WM_CANCELMODE, IntPtr.Zero, IntPtr.Zero);
                             HotkeyPressed?.Invoke(id);
                             return (IntPtr)1;
                         }
@@ -215,7 +265,6 @@ internal sealed class WindowMessageLoop
                     // often leaves the keyboard in the previous app. Swallow those keys and
                     // type them into the search box instead. Injected keys are our own
                     // Ctrl+V paste and must reach the target app.
-                    var injected = (info.flags & 0x10) != 0;
                     if (!injected && !ClipboardCapture.SuppressCapture && App.Instance.PanelWantsKeys && !ForegroundIsUs())
                     {
                         _swallowed = vk;
@@ -231,6 +280,13 @@ internal sealed class WindowMessageLoop
             }
         }
         return Win32.CallNextHookEx(_keyboardHook, code, wParam, lParam);
+    }
+
+    private static void OnForeground(IntPtr hook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
+    {
+        ClipboardCapture.NoteExternalWindow(hwnd);
+        Win32.GetWindowThreadProcessId(hwnd, out var pid);
+        if (pid != (uint)Environment.ProcessId) ClipQueue.NoteActivation();
     }
 
     private static bool ForegroundIsUs()

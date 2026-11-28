@@ -20,8 +20,11 @@ internal static class Win32
     public const uint MOD_NOREPEAT = 0x4000;
     public const uint VK_V = 0x56;
     public const uint VK_Q = 0x51;
+    public const uint CF_BITMAP = 2;
+    public const uint CF_DIB = 8;
     public const uint CF_UNICODETEXT = 13;
     public const uint CF_HDROP = 15;
+    public const uint CF_DIBV5 = 17;
     public const int SW_HIDE = 0;
     public const int SW_SHOWNOACTIVATE = 4;
     public const uint INPUT_KEYBOARD = 1;
@@ -265,7 +268,38 @@ internal static class Win32
 
     public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
     public const uint GMEM_MOVEABLE = 0x0002;
+    public const uint MONITOR_DEFAULTTONULL = 0;
     public const uint MONITOR_DEFAULTTONEAREST = 2;
+    public const int GWLP_WNDPROC = -4;
+    public const int WM_CANCELMODE = 0x001F;
+    public const int WM_MEASUREITEM = 0x002C;
+    public const int WM_DRAWITEM = 0x002B;
+    public const int WM_WINDOWPOSCHANGING = 0x0046;
+    public const int WM_COPYDATA = 0x004A;
+    public const int WM_DISPLAYCHANGE = 0x007E;
+    public const int WM_RENDERFORMAT = 0x0305;
+    public const int WM_RENDERALLFORMATS = 0x0306;
+    public const int WM_DESTROYCLIPBOARD = 0x0307;
+    public const int WM_QUEUE_PLACE = WM_APP + 4;
+    public const int WM_QUEUE_TICK = WM_APP + 5;
+    public const uint MF_CHECKED = 0x0008;
+    public const uint MF_UNCHECKED = 0x0000;
+    public const uint MF_GRAYED = 0x0001;
+    public const uint MF_DISABLED = 0x0002;
+    public const uint MF_OWNERDRAW = 0x0100;
+    public const uint ODS_SELECTED = 0x0001;
+    public const uint CBM_INIT = 0x04;
+    public const uint DIB_RGB_COLORS = 0;
+    public const uint SWP_NOACTIVATE = 0x0010;
+    public const uint SWP_SHOWWINDOW = 0x0040;
+    public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+    public const uint WINEVENT_OUTOFCONTEXT = 0x0000;
+    public const int DWMWA_NCRENDERING_POLICY = 2;
+    public const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+    public const int DWMNCRP_DISABLED = 1;
+    public const int DWMNCRP_ENABLED = 2;
+    public const int DWMWCP_ROUND = 2;
+    public const int GCS_COMPSTR = 0x0008;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct WNDCLASS
@@ -380,7 +414,142 @@ internal static class Win32
         public IntPtr hIcon;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
         public string szTip;
+        public uint dwState;
+        public uint dwStateMask;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
+        public string szInfo;
+        public uint uTimeoutOrVersion;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
+        public string szInfoTitle;
+        public uint dwInfoFlags;
+        public Guid guidItem;
+        public IntPtr hBalloonIcon;
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct NOTIFYICONIDENTIFIER
+    {
+        public int cbSize;
+        public IntPtr hWnd;
+        public uint uID;
+        public Guid guidItem;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct WINDOWPOS
+    {
+        public IntPtr hwnd;
+        public IntPtr hwndInsertAfter;
+        public int x;
+        public int y;
+        public int cx;
+        public int cy;
+        public uint flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MEASUREITEMSTRUCT
+    {
+        public uint CtlType;
+        public uint CtlID;
+        public uint itemID;
+        public uint itemWidth;
+        public uint itemHeight;
+        public IntPtr itemData;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct DRAWITEMSTRUCT
+    {
+        public uint CtlType;
+        public uint CtlID;
+        public uint itemID;
+        public uint itemAction;
+        public uint itemState;
+        public IntPtr hwndItem;
+        public IntPtr hDC;
+        public RECT rcItem;
+        public IntPtr itemData;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct COPYDATASTRUCT
+    {
+        public IntPtr dwData;
+        public int cbData;
+        public IntPtr lpData;
+    }
+
+    public delegate void WinEventDelegate(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetClipboardSequenceNumber();
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr MonitorFromRect(ref RECT lprc, uint dwFlags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmSetWindowAttribute(IntPtr hwnd, int dwAttribute, ref int pvAttribute, int cbAttribute);
+
+    [DllImport("shell32.dll")]
+    public static extern int Shell_NotifyIconGetRect(ref NOTIFYICONIDENTIFIER identifier, out RECT iconLocation);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc, WinEventDelegate lpfnWinEventProc, uint idProcess, uint idThread, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    public static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetDC(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+    [DllImport("gdi32.dll")]
+    public static extern IntPtr CreateDIBitmap(IntPtr hdc, IntPtr pbmih, uint flInit, IntPtr lpbInit, IntPtr lpbmi, uint fuUsage);
+
+    [DllImport("gdi32.dll")]
+    public static extern IntPtr CreateRoundRectRgn(int x1, int y1, int x2, int y2, int w, int h);
+
+    [DllImport("user32.dll")]
+    public static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
+
+    [DllImport("user32.dll")]
+    public static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("imm32.dll")]
+    public static extern IntPtr ImmGetContext(IntPtr hWnd);
+
+    [DllImport("imm32.dll")]
+    public static extern bool ImmReleaseContext(IntPtr hWnd, IntPtr hIMC);
+
+    [DllImport("imm32.dll", CharSet = CharSet.Unicode)]
+    public static extern int ImmGetCompositionString(IntPtr hIMC, int dwIndex, byte[]? lpBuf, int dwBufLen);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int MessageBox(IntPtr hWnd, string text, string caption, uint type);
+
+    [DllImport("ole32.dll")]
+    public static extern int OleInitialize(IntPtr pvReserved);
+
+    [DllImport("ole32.dll")]
+    public static extern void OleUninitialize();
+
+    [DllImport("ole32.dll")]
+    public static extern int DoDragDrop(IntPtr pDataObj, IntPtr pDropSource, uint dwOKEffects, out uint pdwEffect);
 }
 
 internal static class HotkeyIds

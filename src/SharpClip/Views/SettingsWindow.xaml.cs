@@ -97,6 +97,7 @@ public sealed partial class SettingsWindow : Window
         TrayTitle.Text = Strings.Get("tray");
         TrayHelp.Text = Strings.Get("tray_hidden");
         QuitButton.Content = Strings.Get("quit");
+        WelcomeButton.Content = Strings.Get("show_welcome");
         BackupHeader.Text = Strings.Get("backup");
         ExportHelp.Text = Strings.Get("export_help");
         ImportHelp.Text = Strings.Get("import_help");
@@ -179,15 +180,33 @@ public sealed partial class SettingsWindow : Window
         PageAbout.Visibility = tag == "about" ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void OnLanguageChanged(object sender, SelectionChangedEventArgs e)
+    private async void OnLanguageChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_loading || LanguageBox.SelectedItem is not ComboBoxItem item) return;
-        SettingsStore.Current.Language = item.Tag as string ?? "";
+        var selected = item.Tag as string ?? "";
+        if (selected == SettingsStore.Current.Language) return;
+        var previous = SettingsStore.Current.Language;
+        SettingsStore.Current.Language = selected;
         SettingsStore.Save();
-        ApplyLabels();
-        LoadValues();
-        App.Instance.ApplyPreferences(refreshHistory: true);
+        Strings.Apply(selected);
+        var dialog = new ContentDialog
+        {
+            Title = Strings.Get("restart_title"),
+            Content = Strings.Get("restart_body"),
+            PrimaryButtonText = Strings.Get("restart_now"),
+            CloseButtonText = Strings.Get("restart_later"),
+            XamlRoot = Root.XamlRoot,
+        };
+        var choice = await dialog.ShowAsync();
+        if (choice == ContentDialogResult.Primary)
+        {
+            App.Instance.Restart();
+            return;
+        }
+        Strings.Apply(previous);
     }
+
+    private void OnShowWelcome(object sender, RoutedEventArgs e) => App.Instance.ShowWelcome();
 
     private void OnLimitChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -404,28 +423,13 @@ public sealed partial class SettingsWindow : Window
 
     private async void OnExcludeAdd(object sender, RoutedEventArgs e)
     {
-        var picker = new FileOpenPicker();
-        InitializePicker(picker);
-        picker.FileTypeFilter.Add(".exe");
-        picker.SuggestedStartLocation = PickerLocationId.ComputerFolder;
-        var file = await picker.PickSingleFileAsync();
-        if (file is null || string.IsNullOrWhiteSpace(file.Name)) return;
-        var description = "";
-        if (!string.IsNullOrWhiteSpace(file.Path))
+        var (file, name) = ClipboardCapture.LastExternalApp();
+        if (string.IsNullOrWhiteSpace(file))
         {
-            try
-            {
-                description = FileVersionInfo.GetVersionInfo(file.Path).FileDescription ?? "";
-            }
-            catch
-            {
-                description = "";
-            }
+            await AlertAsync(Strings.Get("exclusions"), Strings.Get("no_foreground"));
+            return;
         }
-        var appName = string.IsNullOrWhiteSpace(description)
-            ? Path.GetFileNameWithoutExtension(file.Name)
-            : description.Trim();
-        Library.Shared.Exclude(file.Name, appName);
+        Library.Shared.Exclude(file, string.IsNullOrWhiteSpace(name) ? file : name);
         ReloadExclusions();
     }
 
@@ -468,9 +472,9 @@ public sealed partial class SettingsWindow : Window
             var data = new byte[bytes.Length];
             using var reader = Windows.Storage.Streams.DataReader.FromBuffer(bytes);
             reader.ReadBytes(data);
-            var (imported, skipped) = Library.Shared.ImportJson(data);
+            var summary = Library.Shared.ImportJson(data);
             App.Instance.ApplyPreferences(refreshHistory: true);
-            await AlertAsync(Strings.Get("backup"), string.Format(Strings.Get("import_ok"), imported, skipped));
+            await AlertAsync(Strings.Get("backup"), string.Format(Strings.Get("import_summary"), summary.Items, summary.Boards, summary.SkippedItems));
         }
         catch (Exception ex)
         {

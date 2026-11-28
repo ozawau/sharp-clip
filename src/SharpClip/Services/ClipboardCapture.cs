@@ -1,57 +1,90 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 
 namespace SharpClip;
 
-internal sealed record CapturedClip(string ContentType, byte[] Raw, string? Text, string? SourceApp);
+internal sealed record CapturedClip(string ContentType, byte[] Raw, string? Text, string? SourceApp, string? SourceBundle);
+
+internal readonly record struct ClipPayload(uint Format, byte[] Data);
 
 internal static class ClipboardCapture
 {
     private static int _skip;
+    private static uint _ownSequence;
+    private static string? _lastExternalFile;
+    private static string? _lastExternalName;
     internal static volatile bool SuppressCapture;
 
     public static void SkipNext() => Interlocked.Increment(ref _skip);
 
+    public static void NoteOwnWrite() => _ownSequence = Win32.GetClipboardSequenceNumber();
+
+    public static bool IsOwnUpdate() => _ownSequence != 0 && Win32.GetClipboardSequenceNumber() == _ownSequence;
+
     public static bool ConsumeSkip()
     {
-        return Interlocked.Exchange(ref _skip, 0) > 0;
+        int seen;
+        do
+        {
+            seen = Volatile.Read(ref _skip);
+            if (seen <= 0) return false;
+        }
+        while (Interlocked.CompareExchange(ref _skip, seen - 1, seen) != seen);
+        return true;
     }
 
     public static CapturedClip? Read()
     {
         if (IsExcludedForeground()) return null;
+        if (QueueMarkersPresent()) return null;
         if (!Win32.OpenClipboard(IntPtr.Zero)) return null;
         try
         {
-            var source = ForegroundImagePath();
+            var (app, bundle) = ForegroundIdentity();
+            var color = ReadColor();
+            if (color is not null)
+            {
+                return new CapturedClip("color", Encoding.UTF8.GetBytes(color), color, app, bundle);
+            }
+
             if (Win32.IsClipboardFormatAvailable(Win32.CF_HDROP))
             {
                 var files = ReadFiles();
                 if (files.Length > 0)
                 {
                     var text = string.Join(Environment.NewLine, files);
-                    return new CapturedClip("fileURL", Encoding.UTF8.GetBytes(text), text, source);
+                    return new CapturedClip("fileURL", Encoding.UTF8.GetBytes(text), text, app, bundle);
                 }
             }
 
-            var png = Win32.RegisterClipboardFormat("PNG");
+            var png = Format("PNG");
             if (png != 0 && Win32.IsClipboardFormatAvailable(png))
             {
                 var bytes = ReadBytes(png);
-                if (bytes is { Length: > 0 })
-                {
-                    return new CapturedClip("image", bytes, null, source);
-                }
+                if (bytes is { Length: > 8 }) return new CapturedClip("image", bytes, null, app, bundle);
             }
 
-            var htmlFormat = Win32.RegisterClipboardFormat("HTML Format");
+            var htmlFormat = Format("HTML Format");
             if (htmlFormat != 0 && Win32.IsClipboardFormatAvailable(htmlFormat))
             {
                 var html = ReadText(htmlFormat);
                 if (!string.IsNullOrWhiteSpace(html))
                 {
-                    return new CapturedClip("html", Encoding.UTF8.GetBytes(html), StripHtmlFragment(html), source);
+                    var plain = Win32.IsClipboardFormatAvailable(Win32.CF_UNICODETEXT) ? ReadText(Win32.CF_UNICODETEXT) : null;
+                    return new CapturedClip("html", Encoding.UTF8.GetBytes(html), string.IsNullOrWhiteSpace(plain) ? StripHtmlFragment(html) : plain, app, bundle);
+                }
+            }
+
+            var rtf = Format("Rich Text Format");
+            if (rtf != 0 && Win32.IsClipboardFormatAvailable(rtf))
+            {
+                var bytes = ReadBytes(rtf);
+                if (bytes is { Length: > 0 })
+                {
+                    var plain = Win32.IsClipboardFormatAvailable(Win32.CF_UNICODETEXT) ? ReadText(Win32.CF_UNICODETEXT) : null;
+                    return new CapturedClip("richText", bytes, plain, app, bundle);
                 }
             }
 
@@ -60,8 +93,11 @@ internal static class ClipboardCapture
                 var text = ReadText(Win32.CF_UNICODETEXT);
                 if (string.IsNullOrEmpty(text)) return null;
                 var type = LooksLikeUrl(text) ? "url" : "plainText";
-                return new CapturedClip(type, Encoding.UTF8.GetBytes(text), text, source);
+                return new CapturedClip(type, Encoding.UTF8.GetBytes(text), text, app, bundle);
             }
+
+            var dib = ReadImageFallback();
+            if (dib is { Length: > 0 }) return new CapturedClip("image", dib, null, app, bundle);
         }
         finally
         {
@@ -70,32 +106,65 @@ internal static class ClipboardCapture
         return null;
     }
 
-    public static void Place(ClipItem item, bool plain)
+    public static IReadOnlyList<ClipPayload> Payloads(ClipItem item, bool plain)
     {
-        if (!plain && item.ContentType == "image" && item.Raw.Length > 0)
+        var list = new List<ClipPayload>();
+        var text = item.Text ?? "";
+        if (plain || item.ContentType is "plainText" or "url" or "color" or "unknown")
         {
-            WriteImage(item.Raw);
-            return;
+            list.Add(new ClipPayload(Win32.CF_UNICODETEXT, Unicode(plain ? text.Trim() : text)));
+            return list;
         }
-        if (!plain && item.ContentType == "fileURL" && !string.IsNullOrWhiteSpace(item.Text))
+        if (item.ContentType == "image" && item.Raw.Length > 0)
+        {
+            var png = Images.ToPng(item.Raw);
+            var dib = Images.ToDib(item.Raw);
+            var pngFormat = Format("PNG");
+            if (pngFormat != 0 && png is { Length: > 0 }) list.Add(new ClipPayload(pngFormat, png));
+            if (dib is { Length: > 0 }) list.Add(new ClipPayload(Win32.CF_DIB, dib));
+            if (list.Count > 0) return list;
+        }
+        if (item.ContentType == "fileURL" && !string.IsNullOrWhiteSpace(item.Text))
         {
             var files = item.Text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
             if (files.Length > 0 && files.All(File.Exists))
             {
-                WriteFiles(files);
-                return;
+                list.Add(new ClipPayload(Win32.CF_HDROP, DropFiles(files)));
+                return list;
             }
         }
-        WriteText(item.Text ?? "", plain);
+        if (item.ContentType == "richText" && item.Raw.Length > 0)
+        {
+            var format = Format("Rich Text Format");
+            if (format != 0) list.Add(new ClipPayload(format, item.Raw));
+            list.Add(new ClipPayload(Win32.CF_UNICODETEXT, Unicode(text)));
+            return list;
+        }
+        if (item.ContentType == "html" && item.Raw.Length > 0)
+        {
+            var format = Format("HTML Format");
+            var html = Encoding.UTF8.GetString(item.Raw).TrimEnd('\0');
+            if (format != 0) list.Add(new ClipPayload(format, Encoding.UTF8.GetBytes(EnsureHtmlClipboard(html))));
+            list.Add(new ClipPayload(Win32.CF_UNICODETEXT, Unicode(text)));
+            return list;
+        }
+        list.Add(new ClipPayload(Win32.CF_UNICODETEXT, Unicode(plain ? text.Trim() : text)));
+        return list;
     }
 
-    public static void PasteItemInto(IntPtr previous, ClipItem item, bool plain) =>
+    public static void Place(ClipItem item, bool plain)
+    {
+        WritePayloads(Payloads(item, plain));
+    }
+
+    public static bool PasteItemInto(IntPtr previous, ClipItem item, bool plain) =>
         PasteItemInto(previous, IntPtr.Zero, item, plain);
 
-    public static void PasteItemInto(IntPtr previous, IntPtr focus, ClipItem item, bool plain)
+    public static bool PasteItemInto(IntPtr previous, IntPtr focus, ClipItem item, bool plain)
     {
         Place(item, plain);
-        SendPaste(previous, focus);
+        if (!SettingsStore.Current.PasteIntoActiveApp) return true;
+        return SendPaste(previous, focus);
     }
 
     public static void WriteText(string text, bool plain)
@@ -112,6 +181,7 @@ internal static class ClipboardCapture
         {
             Win32.EmptyClipboard();
             Win32.SetClipboardData(Win32.CF_UNICODETEXT, mem);
+            NoteOwnWrite();
         }
         finally
         {
@@ -119,16 +189,17 @@ internal static class ClipboardCapture
         }
     }
 
-    public static void PasteIntoPreviousApp(IntPtr previous, string text, bool plain) =>
+    public static bool PasteIntoPreviousApp(IntPtr previous, string text, bool plain) =>
         PasteIntoPreviousApp(previous, IntPtr.Zero, text, plain);
 
-    public static void PasteIntoPreviousApp(IntPtr previous, IntPtr focus, string text, bool plain)
+    public static bool PasteIntoPreviousApp(IntPtr previous, IntPtr focus, string text, bool plain)
     {
         WriteText(text, plain);
-        SendPaste(previous, focus);
+        if (!SettingsStore.Current.PasteIntoActiveApp) return true;
+        return SendPaste(previous, focus);
     }
 
-    private static void SendPaste(IntPtr previous, IntPtr focus)
+    private static bool SendPaste(IntPtr previous, IntPtr focus)
     {
         SuppressCapture = true;
         try
@@ -141,6 +212,7 @@ internal static class ClipboardCapture
                 Thread.Sleep(15);
             }
             while (Environment.TickCount < until);
+            if (previous == IntPtr.Zero || Win32.GetForegroundWindow() != previous) return false;
 
             // Shift is still held for Shift+Enter. Lift it so the target sees Ctrl+V,
             // not Ctrl+Shift+V, which is the panel shortcut and a different command.
@@ -157,6 +229,7 @@ internal static class ClipboardCapture
             if (win) Tap(0x5B, false);
             if (alt) Tap(0x12, false);
             if (shift) Tap(0x10, false);
+            return true;
         }
         finally
         {
@@ -194,6 +267,13 @@ internal static class ClipboardCapture
             Win32.SetClipboardData(2, hBitmap);
             hBitmap = IntPtr.Zero;
             if (png != 0 && pngMem != IntPtr.Zero) Win32.SetClipboardData(png, pngMem);
+            var dib = Images.ToDib(bytes);
+            if (dib is { Length: > 0 })
+            {
+                var dibMem = CopyToGlobal(dib);
+                if (dibMem != IntPtr.Zero) Win32.SetClipboardData(Win32.CF_DIB, dibMem);
+            }
+            NoteOwnWrite();
         }
         finally
         {
@@ -218,6 +298,7 @@ internal static class ClipboardCapture
         {
             Win32.EmptyClipboard();
             Win32.SetClipboardData(Win32.CF_HDROP, mem);
+            NoteOwnWrite();
         }
         finally
         {
@@ -244,6 +325,160 @@ internal static class ClipboardCapture
     {
         var path = ForegroundImagePath();
         return string.IsNullOrEmpty(path) ? null : Path.GetFileName(path);
+    }
+
+    public static void NoteExternalWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return;
+        Win32.GetWindowThreadProcessId(hwnd, out var pid);
+        if (pid == 0 || pid == (uint)Environment.ProcessId) return;
+        var process = Win32.OpenProcess(Win32.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (process == IntPtr.Zero) return;
+        try
+        {
+            var buffer = new char[1024];
+            var size = buffer.Length;
+            if (!Win32.QueryFullProcessImageName(process, 0, buffer, ref size)) return;
+            var path = new string(buffer, 0, size);
+            _lastExternalFile = Path.GetFileName(path);
+            _lastExternalName = _lastExternalFile;
+            try
+            {
+                var description = System.Diagnostics.FileVersionInfo.GetVersionInfo(path).FileDescription;
+                if (!string.IsNullOrWhiteSpace(description)) _lastExternalName = description.Trim();
+            }
+            catch
+            {
+                _lastExternalName = Path.GetFileNameWithoutExtension(path);
+            }
+        }
+        finally
+        {
+            Win32.CloseHandle(process);
+        }
+    }
+
+    public static (string? File, string? Name) LastExternalApp() => (_lastExternalFile, _lastExternalName);
+
+    public static (string? App, string? Bundle) ForegroundIdentity()
+    {
+        var path = ForegroundImagePath();
+        if (string.IsNullOrEmpty(path)) return (null, null);
+        var file = Path.GetFileName(path);
+        var friendly = file;
+        try
+        {
+            var description = System.Diagnostics.FileVersionInfo.GetVersionInfo(path).FileDescription;
+            if (!string.IsNullOrWhiteSpace(description)) friendly = description.Trim();
+        }
+        catch
+        {
+            friendly = Path.GetFileNameWithoutExtension(file);
+        }
+        return (friendly, path);
+    }
+
+    public static bool QueueMarkersPresent()
+    {
+        foreach (var name in new[] { "org.nspasteboard.TransientType", "org.nspasteboard.ConcealedType", "org.nspasteboard.AutoGeneratedType" })
+        {
+            var format = Format(name);
+            if (format == 0 || !Win32.IsClipboardFormatAvailable(format)) return false;
+        }
+        return true;
+    }
+
+    private static uint Format(string name) => Win32.RegisterClipboardFormat(name);
+
+    private static byte[]? ReadImageFallback()
+    {
+        if (Win32.IsClipboardFormatAvailable(Win32.CF_DIBV5))
+        {
+            var bytes = ReadBytes(Win32.CF_DIBV5);
+            var png = bytes is null ? null : Images.ToPng(bytes);
+            if (png is { Length: > 0 }) return png;
+        }
+        if (Win32.IsClipboardFormatAvailable(Win32.CF_DIB))
+        {
+            var bytes = ReadBytes(Win32.CF_DIB);
+            var png = bytes is null ? null : Images.ToPng(bytes);
+            if (png is { Length: > 0 }) return png;
+        }
+        return null;
+    }
+
+    private static string? ReadColor()
+    {
+        foreach (var name in new[] { "application/x-color", "Color" })
+        {
+            var format = Format(name);
+            if (format == 0 || !Win32.IsClipboardFormatAvailable(format)) continue;
+            var bytes = ReadBytes(format);
+            var hex = ColorHex(bytes);
+            if (hex is not null) return hex;
+        }
+        return null;
+    }
+
+    private static string? ColorHex(byte[]? bytes)
+    {
+        if (bytes is null || bytes.Length < 3) return null;
+        var text = Encoding.UTF8.GetString(bytes).Trim('\0', ' ', '\r', '\n');
+        if (text.Length >= 7 && text[0] == '#'
+            && int.TryParse(text.AsSpan(1, 6), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out _))
+        {
+            return text[..7].ToUpperInvariant();
+        }
+        if (bytes.Length is 4 or 8) return $"#{bytes[0]:X2}{bytes[1]:X2}{bytes[2]:X2}";
+        return null;
+    }
+
+    private static void WritePayloads(IReadOnlyList<ClipPayload> payloads)
+    {
+        if (payloads.Count == 0) return;
+        SkipNext();
+        if (!Win32.OpenClipboard(IntPtr.Zero)) return;
+        try
+        {
+            Win32.EmptyClipboard();
+            foreach (var payload in payloads)
+            {
+                var mem = CopyToGlobal(payload.Data);
+                if (mem != IntPtr.Zero) Win32.SetClipboardData(payload.Format, mem);
+            }
+            NoteOwnWrite();
+        }
+        finally
+        {
+            Win32.CloseClipboard();
+        }
+    }
+
+    private static byte[] Unicode(string text) => Encoding.Unicode.GetBytes(text + "\0");
+
+    private static byte[] DropFiles(string[] files)
+    {
+        var payload = string.Join('\0', files) + "\0\0";
+        var text = Encoding.Unicode.GetBytes(payload);
+        var bytes = new byte[20 + text.Length];
+        BitConverter.GetBytes(20).CopyTo(bytes, 0);
+        BitConverter.GetBytes(1).CopyTo(bytes, 16);
+        text.CopyTo(bytes, 20);
+        return bytes;
+    }
+
+    private static string EnsureHtmlClipboard(string html)
+    {
+        if (html.Contains("StartHTML:", StringComparison.Ordinal)) return html;
+        var fragment = html;
+        const string header = "Version:0.9\r\nStartHTML:00000000\r\nEndHTML:00000000\r\nStartFragment:00000000\r\nEndFragment:00000000\r\n";
+        var document = $"<html><body><!--StartFragment-->{fragment}<!--EndFragment--></body></html>";
+        var startHtml = header.Length;
+        var startFragment = startHtml + document.IndexOf("<!--StartFragment-->", StringComparison.Ordinal) + "<!--StartFragment-->".Length;
+        var endFragment = startHtml + document.IndexOf("<!--EndFragment-->", StringComparison.Ordinal);
+        var endHtml = startHtml + document.Length;
+        var prefix = string.Format(CultureInfo.InvariantCulture, "Version:0.9\r\nStartHTML:{0:00000000}\r\nEndHTML:{1:00000000}\r\nStartFragment:{2:00000000}\r\nEndFragment:{3:00000000}\r\n", startHtml, endHtml, startFragment, endFragment);
+        return prefix + document;
     }
 
     private static string? ForegroundImagePath()

@@ -3,7 +3,8 @@
     x:Class="SharpClip.HistoryWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid x:Name="Root" Background="Transparent" PreviewKeyDown="OnPreviewKey" KeyUp="OnKeyUp">
+    <Grid x:Name="ClipHost" Background="Transparent" SizeChanged="OnClipSize">
+    <Grid x:Name="Root" Background="Transparent" IsTabStop="True" PreviewKeyDown="OnPreviewKey" KeyUp="OnKeyUp">
         <Grid.RenderTransform>
             <TranslateTransform x:Name="Slide" />
         </Grid.RenderTransform>
@@ -14,22 +15,22 @@
 
         <Grid Padding="16,0">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <StackPanel x:Name="FilterBar" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" />
+            <StackPanel x:Name="FilterBar" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" HorizontalAlignment="Left" />
             <ScrollViewer
                 Grid.Column="1"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Center"
-                MaxWidth="560"
                 HorizontalScrollBarVisibility="Hidden"
                 HorizontalScrollMode="Enabled"
                 VerticalScrollMode="Disabled">
-                <StackPanel x:Name="TabBar" Orientation="Horizontal" Spacing="4" />
+                <StackPanel x:Name="TabBar" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" />
             </ScrollViewer>
-            <StackPanel x:Name="ActionBar" Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" />
+            <StackPanel x:Name="SideBar" Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" HorizontalAlignment="Right" />
+            <StackPanel x:Name="ActionBar" Visibility="Collapsed" />
         </Grid>
 
         <ScrollViewer
@@ -61,5 +62,6 @@
                 </ScrollViewer>
             </Border>
         </Grid>
+    </Grid>
     </Grid>
 </Window>

@@ -7,6 +7,8 @@ namespace SharpClip;
 
 internal sealed class AppSettings
 {
+    public int SettingsVersion { get; set; }
+    public bool WelcomeCompleted { get; set; }
     public string Language { get; set; } = "";
     public int HistoryLimit { get; set; } = 500;
     public bool PasteIntoActiveApp { get; set; } = true;
@@ -16,6 +18,7 @@ internal sealed class AppSettings
     public bool Monitoring { get; set; } = true;
     public bool ShowTrayIcon { get; set; } = true;
     public string Theme { get; set; } = "system";
+    public string HistoryTabColor { get; set; } = "";
 
     public bool PanelControl { get; set; } = true;
     public bool PanelShift { get; set; } = true;
@@ -23,17 +26,17 @@ internal sealed class AppSettings
     public bool PanelWin { get; set; }
     public int PanelKey { get; set; } = 0x56;
 
-    public bool QueueControl { get; set; } = true;
-    public bool QueueShift { get; set; } = true;
+    public bool QueueControl { get; set; }
+    public bool QueueShift { get; set; }
     public bool QueueAlt { get; set; }
     public bool QueueWin { get; set; }
-    public int QueueKey { get; set; } = 0x51;
+    public int QueueKey { get; set; }
 
     public bool ClearControl { get; set; } = true;
     public bool ClearShift { get; set; } = true;
     public bool ClearAlt { get; set; }
     public bool ClearWin { get; set; }
-    public int ClearKey { get; set; } = 0x2E;
+    public int ClearKey { get; set; } = 0x08;
 
     public int QuickLookKey { get; set; } = 0x20;
 }
@@ -60,13 +63,27 @@ internal static class SettingsStore
         {
             Current = new AppSettings();
         }
+        if (Current.SettingsVersion < 2)
+        {
+            if (Current.QueueKey == 0x51 && Current.QueueControl && Current.QueueShift && !Current.QueueAlt && !Current.QueueWin)
+            {
+                Current.QueueKey = 0;
+                Current.QueueControl = false;
+                Current.QueueShift = false;
+            }
+            if (Current.ClearKey == 0x2E && Current.ClearControl && Current.ClearShift && !Current.ClearAlt && !Current.ClearWin)
+            {
+                Current.ClearKey = 0x08;
+            }
+            Current.SettingsVersion = 2;
+            Save();
+        }
     }
 
     public static void Save()
     {
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
         File.WriteAllText(Path, JsonSerializer.Serialize(Current, new JsonSerializerOptions { WriteIndented = true }));
-        Strings.Apply(Current.Language);
         StartupRegistration.SetEnabled(Current.LaunchAtLogin);
     }
 
@@ -94,7 +111,7 @@ internal static class SettingsStore
 
 internal static class Strings
 {
-    private static Dictionary<string, string> _map = English;
+    private static Dictionary<string, string> _map = [];
 
     public static string Get(string key) => _map.TryGetValue(key, out var value) && value is not null ? value : English.GetValueOrDefault(key) ?? key;
 
@@ -117,9 +134,9 @@ internal static class Strings
         };
     }
 
-    public static IReadOnlyList<(string Code, string Name)> Languages { get; } =
+    public static IReadOnlyList<(string Code, string Name)> Languages =>
     [
-        ("", "System"),
+        ("", Get("lang_system")),
         ("en", "English"),
         ("ko", "한국어"),
         ("zh-Hans", "简体中文"),
@@ -133,8 +150,8 @@ internal static class Strings
         ["date"] = "Date",
         ["all"] = "All",
         ["today"] = "Today",
-        ["week"] = "This Week",
-        ["month"] = "This Month",
+        ["week"] = "Last 7 days",
+        ["month"] = "Last 30 days",
         ["clear_filters"] = "Clear Filters",
         ["clear_type"] = "Clear Type Filter",
         ["new_board"] = "New Pinboard",
@@ -200,7 +217,7 @@ internal static class Strings
         ["about"] = "About",
         ["pasting"] = "Pasting",
         ["paste_help"] = "Clicking a clip or pressing Enter pastes it where you were typing. When off, the clip is only copied.",
-        ["paste_info"] = "After the panel closes, SharpClip presses Ctrl+V for you.",
+        ["paste_info"] = "After the panel closes, SharpClip presses Ctrl+V. If Windows will not bring that app forward, the clip is still copied.",
         ["plain_help"] = "Hold Shift while pasting to switch for a single paste.",
         ["plain_info"] = "Removes fonts, colors, and links from rich text and HTML clips, pasting only the text.",
         ["tray"] = "Show icon in the notification area",
@@ -244,7 +261,49 @@ internal static class Strings
         ["key_space"] = "Space",
         ["exclude_help"] = "Excluded apps will not have their clipboard content saved.",
         ["about_version"] = "Version {0}",
-        ["about_body"] = "A clipboard manager for Windows.",
+        ["about_body"] = "Free, with no account and no telemetry.",
+        ["lang_system"] = "System",
+        ["today_at"] = "Today {0}",
+        ["yesterday"] = "Yesterday",
+        ["restart_title"] = "Restart SharpClip",
+        ["restart_body"] = "Restart SharpClip to use this language.",
+        ["restart_now"] = "Restart now",
+        ["restart_later"] = "Later",
+        ["show_welcome"] = "Show welcome again",
+        ["queue_title"] = "Clip Queue",
+        ["queue_empty"] = "Copy something and it will wait here.",
+        ["queue_newest"] = "Paste newest first",
+        ["queue_oldest"] = "Paste oldest first",
+        ["queue_start"] = "Start Clip Queue",
+        ["queue_end"] = "End Clip Queue",
+        ["tray_empty"] = "No clipboard history",
+        ["check_updates"] = "Check for Updates",
+        ["up_to_date"] = "SharpClip {0} is already the latest version.",
+        ["feedback"] = "Send Feedback",
+        ["open_link"] = "Open Link",
+        ["move_board"] = "Move to Pinboard",
+        ["change_color"] = "Change Color",
+        ["toast_pasted"] = "Pasted",
+        ["paste_failed_title"] = "Copied only",
+        ["paste_failed_body"] = "Windows did not bring the previous app forward, so Ctrl+V was not sent. The clip is on the clipboard.",
+        ["add_foreground"] = "Add the frontmost app",
+        ["no_foreground"] = "There is no frontmost app to exclude.",
+        ["stats"] = "{0} characters, {1} words, {2} lines",
+        ["import_summary"] = "Imported {0} clips and {1} pinboards, skipped {2} duplicates.",
+        ["welcome_1_title"] = "Everything you copy, kept",
+        ["welcome_1_body"] = "History shows up as cards. Pinboards keep the clips you reuse.",
+        ["welcome_2_title"] = "One shortcut away",
+        ["welcome_2_body"] = "Press this anywhere to open clipboard history.",
+        ["welcome_3_title"] = "You're all set",
+        ["welcome_3_body"] = "Copy something, press the shortcut, and it will be there.",
+        ["welcome_continue"] = "Continue",
+        ["welcome_back"] = "Back",
+        ["welcome_start"] = "Start using SharpClip",
+        ["welcome_import"] = "Import JSON",
+        ["welcome_history"] = "Clipboard history",
+        ["welcome_boards"] = "Pinboards",
+        ["welcome_private"] = "Free, on this PC",
+        ["welcome_private_body"] = "No account and no telemetry.",
     };
 
     private static readonly Dictionary<string, string> Korean = new()
@@ -255,8 +314,8 @@ internal static class Strings
         ["date"] = "날짜",
         ["all"] = "전체",
         ["today"] = "오늘",
-        ["week"] = "이번 주",
-        ["month"] = "이번 달",
+        ["week"] = "최근 7일",
+        ["month"] = "최근 30일",
         ["clear_filters"] = "필터 지우기",
         ["clear_type"] = "유형 필터 지우기",
         ["new_board"] = "새 핀보드",
@@ -322,7 +381,7 @@ internal static class Strings
         ["about"] = "정보",
         ["pasting"] = "붙여넣기",
         ["paste_help"] = "클립을 클릭하거나 Enter를 누르면 입력하던 곳에 붙여넣습니다. 끄면 클립만 복사됩니다.",
-        ["paste_info"] = "패널이 닫힌 뒤 SharpClip이 Ctrl+V를 누릅니다.",
+        ["paste_info"] = "패널이 닫힌 뒤 SharpClip이 Ctrl+V를 누릅니다. Windows가 이전 앱을 앞으로 가져오지 못하면 클립은 복사만 됩니다.",
         ["plain_help"] = "붙여넣는 동안 Shift를 누르면 그 한 번만 반대로 동작합니다.",
         ["plain_info"] = "서식 있는 텍스트와 HTML에서 글꼴, 색, 링크를 빼고 텍스트만 붙여넣습니다.",
         ["tray"] = "알림 영역에 아이콘 표시",
@@ -366,7 +425,49 @@ internal static class Strings
         ["key_space"] = "Space",
         ["exclude_help"] = "제외한 앱의 클립보드 내용은 저장되지 않습니다.",
         ["about_version"] = "버전 {0}",
-        ["about_body"] = "Windows용 클립보드 관리자입니다.",
+        ["about_body"] = "무료이며 계정과 원격 수집이 없습니다.",
+        ["lang_system"] = "시스템",
+        ["today_at"] = "오늘 {0}",
+        ["yesterday"] = "어제",
+        ["restart_title"] = "SharpClip 다시 시작",
+        ["restart_body"] = "이 언어를 쓰려면 SharpClip을 다시 시작하세요.",
+        ["restart_now"] = "지금 다시 시작",
+        ["restart_later"] = "나중에",
+        ["show_welcome"] = "환영 화면 다시 보기",
+        ["queue_title"] = "클립 대기열",
+        ["queue_empty"] = "복사한 내용이 여기에 쌓입니다.",
+        ["queue_newest"] = "최신 항목부터 붙여넣기",
+        ["queue_oldest"] = "오래된 항목부터 붙여넣기",
+        ["queue_start"] = "클립 대기열 시작",
+        ["queue_end"] = "클립 대기열 종료",
+        ["tray_empty"] = "클립 기록이 없습니다",
+        ["check_updates"] = "업데이트 확인",
+        ["up_to_date"] = "SharpClip {0}은 이미 최신 버전입니다.",
+        ["feedback"] = "피드백 보내기",
+        ["open_link"] = "링크 열기",
+        ["move_board"] = "핀보드로 이동",
+        ["change_color"] = "색 변경",
+        ["toast_pasted"] = "붙여넣음",
+        ["paste_failed_title"] = "복사만 됨",
+        ["paste_failed_body"] = "Windows가 이전 앱을 앞으로 가져오지 못해 Ctrl+V를 보내지 않았습니다. 클립은 클립보드에 있습니다.",
+        ["add_foreground"] = "맨 앞 앱 추가",
+        ["no_foreground"] = "제외할 맨 앞 앱이 없습니다.",
+        ["stats"] = "{0}자, {1}단어, {2}줄",
+        ["import_summary"] = "클립 {0}개와 핀보드 {1}개를 가져왔고, 중복 {2}개는 건너뛰었습니다.",
+        ["welcome_1_title"] = "복사한 내용을 보관합니다",
+        ["welcome_1_body"] = "기록은 카드로 표시됩니다. 핀보드는 자주 쓰는 클립을 남겨 둡니다.",
+        ["welcome_2_title"] = "단축키 하나면 됩니다",
+        ["welcome_2_body"] = "어느 앱에서든 이 키를 눌러 클립보드 기록을 엽니다.",
+        ["welcome_3_title"] = "준비되었습니다",
+        ["welcome_3_body"] = "무엇인가 복사한 뒤 단축키를 누르면 여기에 있습니다.",
+        ["welcome_continue"] = "계속",
+        ["welcome_back"] = "뒤로",
+        ["welcome_start"] = "SharpClip 시작",
+        ["welcome_import"] = "JSON 가져오기",
+        ["welcome_history"] = "클립보드 기록",
+        ["welcome_boards"] = "핀보드",
+        ["welcome_private"] = "이 PC에서 무료",
+        ["welcome_private_body"] = "계정과 원격 수집이 없습니다.",
     };
 
     private static readonly Dictionary<string, string> Chinese = new()
@@ -377,8 +478,8 @@ internal static class Strings
         ["date"] = "日期",
         ["all"] = "全部",
         ["today"] = "今天",
-        ["week"] = "本周",
-        ["month"] = "本月",
+        ["week"] = "近 7 天",
+        ["month"] = "近 30 天",
         ["clear_filters"] = "清除筛选",
         ["clear_type"] = "清除类型筛选",
         ["new_board"] = "新建 Pinboard",
@@ -444,7 +545,7 @@ internal static class Strings
         ["about"] = "关于",
         ["pasting"] = "粘贴",
         ["paste_help"] = "点击剪贴或按 Enter，会粘贴到你正在输入的位置。关闭后只复制，不粘贴。",
-        ["paste_info"] = "面板关闭后，SharpClip 会替你按下 Ctrl+V。",
+        ["paste_info"] = "面板关闭后，SharpClip 会替你按下 Ctrl+V。如果系统拒绝把上一个应用带到前台，内容仍会留在剪贴板。",
         ["plain_help"] = "粘贴时按住 Shift，只对这一次反过来。",
         ["plain_info"] = "去掉富文本和 HTML 里的字体、颜色和链接，只粘贴文字。",
         ["tray"] = "在通知区域显示图标",
@@ -488,7 +589,49 @@ internal static class Strings
         ["key_space"] = "空格",
         ["exclude_help"] = "被排除的应用不会保存剪贴板内容。",
         ["about_version"] = "版本 {0}",
-        ["about_body"] = "Windows 上的剪贴板管理器。",
+        ["about_body"] = "免费，无账号、无遥测。",
+        ["lang_system"] = "跟随系统",
+        ["today_at"] = "今天 {0}",
+        ["yesterday"] = "昨天",
+        ["restart_title"] = "重新启动 SharpClip",
+        ["restart_body"] = "重新启动后，整个界面会使用这个语言。",
+        ["restart_now"] = "立即重新启动",
+        ["restart_later"] = "稍后",
+        ["show_welcome"] = "重新显示欢迎",
+        ["queue_title"] = "剪贴队列",
+        ["queue_empty"] = "复制的内容会在这里排队。",
+        ["queue_newest"] = "先贴最新",
+        ["queue_oldest"] = "先贴最旧",
+        ["queue_start"] = "开始剪贴队列",
+        ["queue_end"] = "结束剪贴队列",
+        ["tray_empty"] = "没有剪贴历史",
+        ["check_updates"] = "检查更新",
+        ["up_to_date"] = "SharpClip {0} 已是最新版本。",
+        ["feedback"] = "发送反馈",
+        ["open_link"] = "打开链接",
+        ["move_board"] = "移动到 Pinboard",
+        ["change_color"] = "改颜色",
+        ["toast_pasted"] = "已粘贴",
+        ["paste_failed_title"] = "只复制了",
+        ["paste_failed_body"] = "系统没有把上一个应用带到前台，因此没有发送 Ctrl+V。内容已经在剪贴板上。",
+        ["add_foreground"] = "添加当前前台应用",
+        ["no_foreground"] = "没有可以排除的前台应用。",
+        ["stats"] = "{0} 个字符，{1} 个词，{2} 行",
+        ["import_summary"] = "导入了 {0} 条剪贴和 {1} 个 Pinboard，跳过了 {2} 条重复。",
+        ["welcome_1_title"] = "复制过的内容会留下来",
+        ["welcome_1_body"] = "历史以卡片显示。Pinboard 留下你反复要用的剪贴。",
+        ["welcome_2_title"] = "一个快捷键",
+        ["welcome_2_body"] = "在任何应用里按下它，打开剪贴历史。",
+        ["welcome_3_title"] = "可以开始了",
+        ["welcome_3_body"] = "复制一段内容，按下快捷键，它就会在这里。",
+        ["welcome_continue"] = "继续",
+        ["welcome_back"] = "返回",
+        ["welcome_start"] = "开始使用 SharpClip",
+        ["welcome_import"] = "导入 JSON",
+        ["welcome_history"] = "剪贴历史",
+        ["welcome_boards"] = "Pinboard",
+        ["welcome_private"] = "免费，留在这台电脑",
+        ["welcome_private_body"] = "无账号、无遥测。",
     };
 }
 

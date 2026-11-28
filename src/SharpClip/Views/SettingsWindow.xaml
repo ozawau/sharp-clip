@@ -119,6 +119,7 @@
                                     </StackPanel>
                                     <ToggleSwitch x:Name="TraySwitch" Grid.Column="1" MinWidth="0" OffContent="" OnContent="" Toggled="OnTrayToggled" />
                                 </Grid>
+                                <Button x:Name="WelcomeButton" HorizontalAlignment="Left" Click="OnShowWelcome" />
                                 <Button x:Name="QuitButton" HorizontalAlignment="Left" Click="OnQuit" />
                             </StackPanel>
                         </Border>
