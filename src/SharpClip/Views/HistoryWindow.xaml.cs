@@ -5,6 +5,7 @@ using Microsoft.UI.Text;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
@@ -63,6 +64,8 @@ public sealed partial class HistoryWindow : Window
     private Point _grab;
     private Border? _dragSource;
     private string _dragPayload = "";
+    private string _systemPayload = "";
+    private bool _systemDrag;
     private readonly List<(Button Button, Guid Board)> _dropTabs = new();
 
     public bool IsDialogOpen => _dialogs > 0;
@@ -86,6 +89,11 @@ public sealed partial class HistoryWindow : Window
         };
         ApplyAppearance();
         Chrome();
+        Root.AllowDrop = true;
+        Root.DragOver += OnPanelDragOver;
+        Root.DragLeave += (_, _) => ClearDropHighlight();
+        Root.Drop += OnPanelDrop;
+        CardScroller.LayoutUpdated += (_, _) => RelaxCardClip();
         AppWindow.IsShownInSwitchers = false;
         AppWindow.Hide();
     }
@@ -660,7 +668,7 @@ public sealed partial class HistoryWindow : Window
         };
         card.PointerEntered += (_, _) =>
         {
-            Canvas.SetZIndex(host, 1);
+            Canvas.SetZIndex(host, 100);
             if (!PhysicalCtrl() && !PhysicalShift()) FocusCard(index);
             Lift(card, true, true);
             if (!_selected.Contains(item.Id))
@@ -740,22 +748,52 @@ public sealed partial class HistoryWindow : Window
         };
         card.ContextFlyout = CardMenu(item);
         card.CanDrag = true;
-        card.DragStarting += (_, args) =>
+        card.DragStarting += async (_, args) =>
         {
-            var package = args.Data;
-            package.RequestedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
-            if (item.ContentType == "fileURL")
+            var deferral = args.GetDeferral();
+            try
             {
-                package.SetText(item.Text ?? "");
-                return;
+                var ids = _selected.Contains(item.Id) ? _selected.ToArray() : new[] { item.Id };
+                _systemPayload = "sharpclip-clip\n" + string.Join('\n', ids);
+                _systemDrag = true;
+                var package = args.Data;
+                package.RequestedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
+                package.Properties["sharpclip-clip"] = _systemPayload;
+                if (item.ContentType == "fileURL")
+                    package.SetText(item.Text ?? "");
+                else if (item.ContentType == "image" && item.Raw.Length > 0)
+                {
+                    var stream = new MemoryStream(item.Raw);
+                    package.SetBitmap(Windows.Storage.Streams.RandomAccessStreamReference.CreateFromStream(stream.AsRandomAccessStream()));
+                }
+                else
+                    package.SetText(item.Text ?? item.Display);
+
+                var anchor = args.GetPosition(card);
+                var scale = card.XamlRoot?.RasterizationScale ?? 1;
+                var shown = card.Opacity;
+                card.Opacity = 1;
+                var bitmap = await TranslucentCard(card, 0.5);
+                card.Opacity = shown < 1 ? shown : 0.35;
+                if (bitmap is not null)
+                    args.DragUI.SetContentFromSoftwareBitmap(bitmap, new Point(anchor.X * scale, anchor.Y * scale));
             }
-            if (item.ContentType == "image" && item.Raw.Length > 0)
+            catch
             {
-                var stream = new MemoryStream(item.Raw);
-                package.SetBitmap(Windows.Storage.Streams.RandomAccessStreamReference.CreateFromStream(stream.AsRandomAccessStream()));
-                return;
+                card.Opacity = 0.35;
             }
-            package.SetText(item.Text ?? item.Display);
+            finally
+            {
+                deferral.Complete();
+            }
+        };
+        card.DropCompleted += (_, _) =>
+        {
+            _systemDrag = false;
+            _systemPayload = "";
+            card.Opacity = 1;
+            EndCardDrag();
+            ClearDropHighlight();
         };
         return host;
     }
@@ -807,7 +845,7 @@ public sealed partial class HistoryWindow : Window
         var origin = card.TransformToVisual(Root).TransformPoint(new Point(0, 0));
         _grab = new Point(point.X - origin.X, point.Y - origin.Y);
         _dragSource = card;
-        card.Opacity = 0.32;
+        card.Opacity = 0.35;
         card.Scale = Vector3.One;
         card.Translation = Vector3.Zero;
 
@@ -820,7 +858,6 @@ public sealed partial class HistoryWindow : Window
             BorderBrush = new SolidColorBrush(C(0x3B, 0x71, 0xF3)),
             BorderThickness = new Thickness(1.5),
             Padding = new Thickness(10, 8, 10, 8),
-            Opacity = 0.5,
             IsHitTestVisible = false,
             Child = CardContents(item, style),
             RenderTransformOrigin = new Point(0.5, 0.5),
@@ -830,6 +867,7 @@ public sealed partial class HistoryWindow : Window
         {
             Width = card.Width,
             Height = card.Height,
+            Opacity = 0.45,
             IsHitTestVisible = false,
             Children = { ghost },
         };
@@ -870,6 +908,57 @@ public sealed partial class HistoryWindow : Window
         DragLayer.Children.Clear();
     }
 
+    private void OnPanelDragOver(object sender, DragEventArgs e)
+    {
+        if (!_systemDrag)
+        {
+            e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.None;
+            return;
+        }
+        e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
+        e.DragUIOverride.IsGlyphVisible = false;
+        e.DragUIOverride.IsCaptionVisible = false;
+        e.Handled = true;
+        HighlightDrop(e.GetPosition(Root));
+    }
+
+    private void OnPanelDrop(object sender, DragEventArgs e)
+    {
+        var point = e.GetPosition(Root);
+        var payload = _systemPayload;
+        _systemDrag = false;
+        _systemPayload = "";
+        ClearDropHighlight();
+        e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
+        e.Handled = true;
+        if (DropBoard(point) is Guid board) AcceptClipDrop(board, payload);
+    }
+
+    private static async Task<Windows.Graphics.Imaging.SoftwareBitmap?> TranslucentCard(FrameworkElement element, double opacity)
+    {
+        if (element.ActualWidth < 1 || element.ActualHeight < 1) return null;
+        var scale = element.XamlRoot?.RasterizationScale ?? 1;
+        var width = Math.Max(1, (int)Math.Round(element.ActualWidth * scale));
+        var height = Math.Max(1, (int)Math.Round(element.ActualHeight * scale));
+        var target = new RenderTargetBitmap();
+        await target.RenderAsync(element, width, height);
+        var pixels = (await target.GetPixelsAsync()).ToArray();
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            pixels[i] = (byte)(pixels[i] * opacity);
+            pixels[i + 1] = (byte)(pixels[i + 1] * opacity);
+            pixels[i + 2] = (byte)(pixels[i + 2] * opacity);
+            pixels[i + 3] = (byte)(pixels[i + 3] * opacity);
+        }
+        var bitmap = new Windows.Graphics.Imaging.SoftwareBitmap(
+            Windows.Graphics.Imaging.BitmapPixelFormat.Bgra8,
+            width,
+            height,
+            Windows.Graphics.Imaging.BitmapAlphaMode.Premultiplied);
+        bitmap.CopyFromBuffer(pixels.AsBuffer());
+        return bitmap;
+    }
+
     private FrameworkElement CardHeader(ClipItem item, TypeLook style)
     {
         var row = new Grid { Margin = new Thickness(0, 0, 0, 6) };
@@ -879,17 +968,28 @@ public sealed partial class HistoryWindow : Window
         {
             Background = new SolidColorBrush(Color.FromArgb(40, style.Tint.R, style.Tint.G, style.Tint.B)),
             CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(7, 3, 7, 3),
+            Padding = new Thickness(6, 3, 7, 3),
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Center,
-            Child = new TextBlock
-            {
-                Text = style.Label,
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(style.Tint),
-            },
         };
+        var title = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 4,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var typeIcon = Glyph(style.Glyph, 12, new SolidColorBrush(style.Tint));
+        typeIcon.VerticalAlignment = VerticalAlignment.Center;
+        title.Children.Add(typeIcon);
+        title.Children.Add(new TextBlock
+        {
+            Text = style.Label,
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(style.Tint),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        badge.Child = title;
         row.Children.Add(badge);
         var mark = AppMark(item.SourceBundle ?? item.SourceApp);
         mark.HorizontalAlignment = HorizontalAlignment.Right;
@@ -1888,10 +1988,10 @@ public sealed partial class HistoryWindow : Window
         }
     }
 
-    private MenuFlyout TypeFlyout()
+    private Flyout TypeFlyout()
     {
-        var menu = new MenuFlyout();
-        menu.Items.Add(Item(Strings.Get("all"), () =>
+        var panel = new StackPanel { MinWidth = 168 };
+        panel.Children.Add(TypeChoice(null, Strings.Get("all"), null, false, () =>
         {
             _types.Clear();
             BuildChrome();
@@ -1900,27 +2000,75 @@ public sealed partial class HistoryWindow : Window
         foreach (var type in new[] { "plainText", "richText", "html", "image", "url", "fileURL", "color" })
         {
             var look = TypeStyle(type, null);
-            var toggle = new ToggleMenuFlyoutItem { Text = look.Label, IsChecked = _types.Contains(type) };
             var captured = type;
-            toggle.Click += (_, _) =>
+            panel.Children.Add(TypeChoice(look.Glyph, look.Label, look.Tint, _types.Contains(type), () =>
             {
                 if (!_types.Add(captured)) _types.Remove(captured);
                 BuildChrome();
                 Render();
-            };
-            menu.Items.Add(toggle);
+            }));
         }
         if (_types.Count > 0)
         {
-            menu.Items.Add(new MenuFlyoutSeparator());
-            menu.Items.Add(Item(Strings.Get("clear_type"), () =>
+            panel.Children.Add(new Border
+            {
+                Height = 1,
+                Margin = new Thickness(8, 4, 8, 4),
+                Background = LineBrush(),
+            });
+            panel.Children.Add(TypeChoice(null, Strings.Get("clear_type"), null, false, () =>
             {
                 _types.Clear();
                 BuildChrome();
                 Render();
             }));
         }
-        return menu;
+        return new Flyout { Content = panel };
+    }
+
+    private Button TypeChoice(string? glyph, string label, Color? tint, bool selected, Action action)
+    {
+        var row = new Grid { ColumnSpacing = 8 };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        if (selected)
+        {
+            var mark = Glyph("\uE73E", 12, new SolidColorBrush(C(0x3B, 0x71, 0xF3)));
+            mark.HorizontalAlignment = HorizontalAlignment.Center;
+            mark.VerticalAlignment = VerticalAlignment.Center;
+            row.Children.Add(mark);
+        }
+        var textColumn = 1;
+        if (glyph is not null)
+        {
+            var icon = Glyph(glyph, 14, new SolidColorBrush(tint ?? ActiveBrush().Color));
+            icon.VerticalAlignment = VerticalAlignment.Center;
+            Grid.SetColumn(icon, 1);
+            row.Children.Add(icon);
+            textColumn = 2;
+        }
+        var text = new TextBlock
+        {
+            Text = label,
+            FontSize = 14,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = ActiveBrush(),
+        };
+        Grid.SetColumn(text, textColumn);
+        if (glyph is null) Grid.SetColumnSpan(text, 2);
+        row.Children.Add(text);
+        var button = new Button
+        {
+            Content = row,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(10, 7, 10, 7),
+        };
+        button.Click += (_, _) => action();
+        return button;
     }
 
     private MenuFlyout DateFlyout()
@@ -2409,6 +2557,38 @@ public sealed partial class HistoryWindow : Window
     private Color SelectedFill() => Dark ? C(0x1B, 0x20, 0x2A) : C(0xF6, 0xF9, 0xFF);
 
     private static Color C(byte r, byte g, byte b) => Color.FromArgb(255, r, g, b);
+
+    private ScrollContentPresenter? _cardPresenter;
+
+    private void RelaxCardClip()
+    {
+        _cardPresenter ??= FindChild<ScrollContentPresenter>(CardScroller);
+        if (_cardPresenter is null || _cardPresenter.ActualWidth <= 0 || _cardPresenter.ActualHeight <= 0) return;
+        const double pad = 48;
+        var next = new Rect(-pad, -pad, _cardPresenter.ActualWidth + pad * 2, _cardPresenter.ActualHeight + pad * 2);
+        if (_cardPresenter.Clip is RectangleGeometry current
+            && Math.Abs(current.Rect.X - next.X) < 0.5
+            && Math.Abs(current.Rect.Y - next.Y) < 0.5
+            && Math.Abs(current.Rect.Width - next.Width) < 0.5
+            && Math.Abs(current.Rect.Height - next.Height) < 0.5)
+        {
+            return;
+        }
+        _cardPresenter.Clip = new RectangleGeometry { Rect = next };
+    }
+
+    private static T? FindChild<T>(DependencyObject root) where T : DependencyObject
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match) return match;
+            var nested = FindChild<T>(child);
+            if (nested is not null) return nested;
+        }
+        return null;
+    }
 
     private static void Lift(UIElement element, bool hover, bool selected)
     {
