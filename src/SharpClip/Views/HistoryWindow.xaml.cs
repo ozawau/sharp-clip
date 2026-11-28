@@ -81,6 +81,7 @@ public sealed partial class HistoryWindow : Window
     {
         InitializeComponent();
         Title = "SharpClip";
+        WindowIcon.Apply(this);
         _hint.Tick += (_, _) =>
         {
             _hint.Stop();
@@ -1365,10 +1366,10 @@ public sealed partial class HistoryWindow : Window
         }
         if (!SearchHasFocus() && !CtrlDown() && !AltDown() && !WinDown())
         {
-            var typed = TextFor((int)PhysicalKey(e));
-            if (!string.IsNullOrEmpty(typed))
+            var vk = (int)PhysicalKey(e);
+            if (!string.IsNullOrEmpty(TextFor(vk)))
             {
-                InsertSearch(typed);
+                SteerSearchKey(vk);
                 e.Handled = true;
             }
         }
@@ -1470,9 +1471,8 @@ public sealed partial class HistoryWindow : Window
             }
             return;
         }
-        var text = TextFor(vk);
-        if (string.IsNullOrEmpty(text)) return;
-        InsertSearch(text);
+        if (string.IsNullOrEmpty(TextFor(vk))) return;
+        SteerSearchKey(vk);
     }
 
     private void LeaveSearchUnfocused()
@@ -1511,25 +1511,39 @@ public sealed partial class HistoryWindow : Window
                 if (attached) Win32.AttachThreadInput(thisThread, foreThread, false);
             }
             Activate();
-            _search.Focus(FocusState.Programmatic);
+            _search.Focus(FocusState.Keyboard);
         }
         catch
         {
-            // The typed character is still written into the search box.
+            // The replayed key is delivered to the search box after focus moves.
         }
     }
 
-    private void InsertSearch(string text)
+    private int _steering;
+
+    private void SteerSearchKey(int vk)
     {
-        if (_search is null || text.Length == 0) return;
-        var wasFocused = SearchHasFocus();
+        if (_steering == vk || _search is null || string.IsNullOrEmpty(TextFor(vk))) return;
+        _steering = vk;
         FocusSearch();
-        var current = _search.Text ?? "";
-        var caret = wasFocused ? Math.Clamp(_search.SelectionStart, 0, current.Length) : current.Length;
-        var length = wasFocused ? Math.Max(0, _search.SelectionLength) : 0;
-        if (caret + length > current.Length) length = 0;
-        _search.Text = string.Concat(current.AsSpan(0, caret), text, current.AsSpan(caret + length));
-        _search.SelectionStart = caret + text.Length;
+        var key = (ushort)vk;
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            try
+            {
+                var inputs = new Win32.INPUT[2];
+                inputs[0].type = Win32.INPUT_KEYBOARD;
+                inputs[0].ki.wVk = key;
+                inputs[1].type = Win32.INPUT_KEYBOARD;
+                inputs[1].ki.wVk = key;
+                inputs[1].ki.dwFlags = Win32.KEYEVENTF_KEYUP;
+                Win32.SendInput(2, inputs, System.Runtime.InteropServices.Marshal.SizeOf<Win32.INPUT>());
+            }
+            finally
+            {
+                _steering = 0;
+            }
+        });
     }
 
     private static string? TextFor(int vk)

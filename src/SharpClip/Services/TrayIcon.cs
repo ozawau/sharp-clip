@@ -10,6 +10,7 @@ internal static class TrayIcon
     private const uint IconId = 1;
     private static IntPtr _hwnd;
     private static IntPtr _icon;
+    private static Icon? _brand;
     private static bool _added;
     private static MenuRow[] _rows = [];
 
@@ -270,6 +271,12 @@ internal static class TrayIcon
 
     private static IntPtr MakeIcon()
     {
+        var path = Path.Combine(AppContext.BaseDirectory, "Assets", "SharpClip.ico");
+        if (File.Exists(path))
+        {
+            _brand = new Icon(path, 32, 32);
+            return _brand.Handle;
+        }
         using var bitmap = new Bitmap(32, 32, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(bitmap))
         {
@@ -298,4 +305,13 @@ internal static class TrayIcon
     }
 
     private sealed record MenuRow(int Id, string Title, string? Sub, bool Disabled, bool Checked);
+}
+
+internal static class WindowIcon
+{
+    public static void Apply(Microsoft.UI.Xaml.Window window)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "Assets", "SharpClip.ico");
+        if (File.Exists(path)) window.AppWindow.SetIcon(path);
+    }
 }

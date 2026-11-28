@@ -19,6 +19,7 @@ internal sealed class QueueWindow : Window
 
     public QueueWindow()
     {
+        WindowIcon.Apply(this);
         var chrome = new Grid { Padding = new Thickness(10, 8, 8, 8) };
         chrome.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         chrome.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });

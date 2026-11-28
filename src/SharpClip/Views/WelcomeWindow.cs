@@ -21,6 +21,7 @@ internal sealed class WelcomeWindow : Window
 
     public WelcomeWindow()
     {
+        WindowIcon.Apply(this);
         var root = new Grid { Padding = new Thickness(28), RowSpacing = 16 };
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });

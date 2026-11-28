@@ -14,7 +14,7 @@
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <EnableMsixTooling>true</EnableMsixTooling>
-    <ApplicationIcon />
+    <ApplicationIcon>Assets\SharpClip.ico</ApplicationIcon>
     <Version>1.0.0</Version>
   </PropertyGroup>
 
@@ -27,5 +27,11 @@
 
   <ItemGroup>
     <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\SharpClip.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 </Project>
